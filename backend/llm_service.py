@@ -403,3 +403,28 @@ async def generate_reminder_advisory(description: str, weather_data: dict, city_
         record_error("Groq", type(e).__name__, str(e), traceback.format_exc())
         logger.error(f"Reminder advisory failed: {e}", extra={"service": "Groq"}, exc_info=True)
         return "WeatherTwin is currently unable to generate a specific advisory, but please check the latest conditions before proceeding."
+
+
+def generate_dynamic_insight(prompt: str) -> str:
+    """Synchronous helper for background workers to generate simple insights."""
+    import asyncio
+    
+    async def _async_call():
+        response = await client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.6,
+            max_tokens=400,
+        )
+        return response.choices[0].message.content.strip()
+        
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_async_call())
+    except Exception as e:
+        logger.error(f"Sync dynamic insight failed: {e}")
+        return "Weather insight unavailable."
