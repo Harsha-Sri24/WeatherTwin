@@ -85,7 +85,7 @@ async def get_health_recommendation(
         response = await client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": f"You are a health-weather advisor. The user prefers {unit_pref}. Provide brief, actionable health recommendations (max 300 chars) based on weather-health indices using {unit_pref} logic and symbols."},
+                {"role": "system", "content": f"You are a health-weather advisor. The user prefers {unit_pref}. Provide brief, actionable health recommendations (max 400 chars) based on weather-health indices and the user's specific health profile. If multiple conditions are listed (e.g. Asthma and Allergies), ensure your advice addresses all of them using {unit_pref} logic and symbols."},
                 {"role": "user", "content": f"City: {city}. Indices: {idx_summary}. {health_context}. What should this person be aware of today?"},
             ],
             temperature=0.6,

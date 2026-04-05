@@ -14,6 +14,39 @@ from .service import (
 )
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_ensure_data_loaded():
+    return ensure_data_loaded()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_national_heatmap_data():
+    return get_national_heatmap_data()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_state_overdose_trend(state, substance=None):
+    return get_state_overdose_trend(state, substance)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_substance_breakdown(state):
+    return get_substance_breakdown(state)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_generate_state_summary(state, substance=None):
+    return generate_state_summary(state, substance)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_generate_trend_alert(state):
+    return generate_trend_alert(state)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_nearby_treatment_facilities(lat, lon, radius_miles=25):
+    return get_nearby_treatment_facilities(lat, lon, radius_miles)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_answer_public_health_question(question, state_context=""):
+    return answer_public_health_question(question, state_context)
+
+
 US_STATES = [
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
     "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
@@ -51,7 +84,7 @@ def render_public_health_tab():
     # ── Data loading indicator ────────────────────
     with st.spinner("Loading public health data from CDC..."):
         try:
-            ensure_data_loaded()
+            _cached_ensure_data_loaded()
             data_loaded = True
         except Exception as e:
             data_loaded = False
@@ -61,7 +94,7 @@ def render_public_health_tab():
     st.subheader("📍 National Overdose Overview")
 
     if data_loaded:
-        heatmap_data = get_national_heatmap_data()
+        heatmap_data = _cached_get_national_heatmap_data()
         if heatmap_data:
             try:
                 import plotly.express as px
@@ -109,7 +142,7 @@ def render_public_health_tab():
 
     if data_loaded:
         # Trend chart
-        trend = get_state_overdose_trend(selected_state, substance_param)
+        trend = _cached_get_state_overdose_trend(selected_state, substance_param)
 
         if "error" not in trend and trend.get("trend_data"):
             df_trend = pd.DataFrame(trend["trend_data"])
@@ -162,7 +195,7 @@ def render_public_health_tab():
                     "This may be due to data availability from the CDC API.")
 
         # Substance breakdown
-        breakdown = get_substance_breakdown(selected_state)
+        breakdown = _cached_get_substance_breakdown(selected_state)
         if breakdown:
             st.divider()
             st.subheader(f"📊 Substance Breakdown — {selected_state}")
@@ -190,14 +223,14 @@ def render_public_health_tab():
 
     if st.button(f"Generate Summary for {selected_state}", key="ph_gen_summary"):
         with st.spinner("Analyzing data and generating summary..."):
-            summary = generate_state_summary(selected_state, substance_param)
+            summary = _cached_generate_state_summary(selected_state, substance_param)
         st.info(summary)
         st.caption("Generated from CDC official aggregate statistics · Not individual-level data")
 
     # ── Trend Alert ───────────────────────────────
     if data_loaded:
         try:
-            alert = generate_trend_alert(selected_state)
+            alert = _cached_generate_trend_alert(selected_state)
             if alert.get("has_alert"):
                 st.warning(f"⚠️ **Emerging Trend Alert — {selected_state}**\n\n{alert['alert_text']}")
         except Exception:
@@ -217,7 +250,7 @@ def render_public_health_tab():
 
     if user_lat and user_lon:
         radius = st.slider("Search radius (miles)", 5, 100, 25, key="ph_radius")
-        facilities = get_nearby_treatment_facilities(user_lat, user_lon, radius)
+        facilities = _cached_get_nearby_treatment_facilities(user_lat, user_lon, radius)
 
         if facilities:
             st.write(f"Found **{len(facilities)}** facilities within {radius} miles")
@@ -288,7 +321,7 @@ def render_public_health_tab():
         st.session_state.ph_chat_history.append({"role": "user", "content": ph_question})
 
         with st.spinner("🏥 Analyzing..."):
-            answer = answer_public_health_question(ph_question, selected_state)
+            answer = _cached_answer_public_health_question(ph_question, selected_state)
 
         st.session_state.ph_chat_history.append({"role": "assistant", "content": answer})
         st.rerun()

@@ -7,10 +7,15 @@ import httpx
 import numpy as np
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 import os
 import time
+from dotenv import load_dotenv
+
+# Load .env (relative to this file, which is in backend/)
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 
 # Import monitoring and logging
 try:
@@ -82,12 +87,52 @@ WMO_ICONS = {
 }
 
 
+@track_api_call("OpenMeteo", "geocode_search")
+async def search_city_suggestions(query: str, limit: int = 5) -> List[dict]:
+    """Search for matching cities and return multiple results."""
+    if not query or len(query) < 3:
+        return []
+    
+    # Split by comma and take the first part (the city name) for the API call
+    # because Open-Meteo geocoding works best with simple city names.
+    # Ex: "Paris, France" becomes "Paris".
+    search_name = query.split(",")[0].strip()
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(GEOCODE_URL, params={"name": search_name, "count": limit, "language": "en"})
+            resp.raise_for_status()
+            data = resp.json()
+            
+        results = data.get("results")
+        if not results:
+            return []
+            
+        return [
+            {
+                "name": x.get("name", ""),
+                "country": x.get("country", ""),
+                "admin1": x.get("admin1", ""),
+                "latitude": x["latitude"],
+                "longitude": x["longitude"],
+                "display": f"{x.get('name')}, {x.get('admin1', '')}, {x.get('country', '')}" if x.get('admin1') else f"{x.get('name')}, {x.get('country', '')}"
+            }
+            for x in results
+        ]
+    except Exception as e:
+        logger.error(f"Search failed for '{query}': {e}")
+        return []
+
+
 @track_api_call("OpenMeteo", "geocode")
 async def geocode_city(name: str) -> Optional[dict]:
     """Resolve a city name to lat/lon + metadata."""
-    # Sanitize name: remove commas which can trip up Open-Meteo geocoding
-    search_name = name.replace(",", " ").strip()
-    logger.info(f"Geocoding city: {search_name}", extra={"service": "OpenMeteo", "city": search_name})
+    # Robust splitting for "City, Country" or "City, State, Country" formats
+    query_parts = [p.strip() for p in name.split(",") if p.strip()]
+    search_name = query_parts[0] if query_parts else name.strip()
+    
+    logger.info(f"Geocoding city query: '{name}' -> simplified name: '{search_name}'", 
+                extra={"service": "OpenMeteo", "city": name})
     
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(GEOCODE_URL, params={"name": search_name, "count": 5, "language": "en"})
@@ -100,9 +145,6 @@ async def geocode_city(name: str) -> Optional[dict]:
         return None
 
     r = results[0]
-    logger.info(f"Geocoded '{search_name}' -> {r.get('name')}, {r.get('country', '')} ({r['latitude']}, {r['longitude']})",
-                extra={"service": "OpenMeteo", "city": r.get("name")})
-                
     return {
         "name": r.get("name"),
         "country": r.get("country", ""),
@@ -120,7 +162,7 @@ async def geocode_city(name: str) -> Optional[dict]:
                 "longitude": x["longitude"],
             }
             for x in results
-        ],
+        ]
     }
 
 
@@ -192,15 +234,19 @@ async def get_current_weather(lat: float, lon: float) -> dict:
 
     api_key = os.getenv("OPENWEATHER_API_KEY", "")
     if not api_key:
-        logger.error("OPENWEATHER_API_KEY not found", extra={"service": "OpenWeatherMap"})
-        raise ValueError("OPENWEATHER_API_KEY not found in environment variables.")
+        logger.warning("OPENWEATHER_API_KEY not found. Fallback to Open-Meteo current conditions.", extra={"service": "OpenWeatherMap"})
+        return None
 
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": "metric"}
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(OWM_CURRENT_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(OWM_CURRENT_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"OpenWeatherMap current weather fetch failed: {e}")
+        return None
 
     owm_condition_id = data["weather"][0]["id"] if "weather" in data and len(data["weather"]) > 0 else 800
     wmo_code = OWM_TO_WMO.get(owm_condition_id, 0)
@@ -316,7 +362,9 @@ async def get_historical_summary(lat: float, lon: float, years: int = 5) -> dict
     all_precip = []
     yearly_data = []
 
-    for y in range(1, years + 1):
+    import asyncio
+
+    async def _fetch_year(y: int):
         year = now.year - y
         center = datetime(year, current_month, min(current_day, 28))
         start = center - timedelta(days=15)
@@ -341,25 +389,32 @@ async def get_historical_summary(lat: float, lon: float, years: int = 5) -> dict
             temps_min = [t for t in daily.get("temperature_2m_min", []) if t is not None]
             temps_mean = [t for t in daily.get("temperature_2m_mean", []) if t is not None]
             precip = [p for p in daily.get("precipitation_sum", []) if p is not None]
-
-            all_temps.extend(temps_mean)
-            all_precip.extend(precip)
-
-            yearly_data.append({
+            
+            return {
                 "year": year,
-                "avg_temp": round(float(np.mean(temps_mean)), 1) if temps_mean else None,
-                "max_temp": round(float(max(temps_max)), 1) if temps_max else None,
-                "min_temp": round(float(min(temps_min)), 1) if temps_min else None,
-                "total_precip": round(float(sum(precip)), 1) if precip else None,
-                "avg_precip": round(float(np.mean(precip)), 1) if precip else None,
-            })
-            logger.debug(f"Historical year {year} loaded", extra={"service": "OpenMeteo"})
+                "temps_mean": temps_mean,
+                "precip": precip,
+                "yearly_data_entry": {
+                    "year": year,
+                    "avg_temp": round(float(np.mean(temps_mean)), 1) if temps_mean else None,
+                    "max_temp": round(float(max(temps_max)), 1) if temps_max else None,
+                    "min_temp": round(float(min(temps_min)), 1) if temps_min else None,
+                    "total_precip": round(float(sum(precip)), 1) if precip else None,
+                    "avg_precip": round(float(np.mean(precip)), 1) if precip else None,
+                }
+            }
         except Exception as e:
-            logger.warning(f"Historical data failed for year {year}: {e}",
-                           extra={"service": "OpenMeteo"}, exc_info=True)
-            record_error("OpenMeteo", type(e).__name__,
-                         f"Historical data {year}: {e}", traceback.format_exc())
-            continue
+            logger.warning(f"Historical data failed for year {year}: {e}", extra={"service": "OpenMeteo"}, exc_info=True)
+            return None
+
+    tasks = [_fetch_year(y) for y in range(1, years + 1)]
+    results = await asyncio.gather(*tasks)
+
+    for res in results:
+        if res:
+            all_temps.extend(res["temps_mean"])
+            all_precip.extend(res["precip"])
+            yearly_data.append(res["yearly_data_entry"])
 
     if not all_temps:
         logger.warning("No historical data available", extra={"service": "OpenMeteo"})
@@ -476,10 +531,42 @@ async def fetch_full_weather_data(geo: dict, grow_api_key: str = "", user_profil
     """Consolidated weather fetch including current, forecast, history and insights."""
     import llm_service as llm
     
+    import asyncio
     lat, lon = geo["latitude"], geo["longitude"]
-    current = await get_current_weather(lat, lon)
-    forecast = await get_forecast(lat, lon, 7)
-    historical = await get_historical_summary(lat, lon, 5)
+    
+    current, forecast, historical = await asyncio.gather(
+        get_current_weather(lat, lon),
+        get_forecast(lat, lon, 7),
+        get_historical_summary(lat, lon, 5)
+    )
+
+    # Fallback for current weather: if OpenWeatherMap failed, use Open-Meteo's forecast data instead.
+    if current is None and forecast and "hourly" in forecast and len(forecast["hourly"]) > 0:
+        first_h = forecast["hourly"][0]
+        # Map Open-Meteo hourly to current weather structure
+        current = {
+            "temperature": first_h.get("temperature"),
+            "feels_like": first_h.get("feels_like"),
+            "humidity": first_h.get("humidity"),
+            "precipitation": first_h.get("precipitation", 0),
+            "cloud_cover": 50, # Rough Estimate
+            "wind_speed": first_h.get("wind_speed", 0),
+            "wind_direction": 0,
+            "wind_gusts": 0,
+            "pressure": 1013,
+            "is_day": first_h.get("is_day", True),
+            "weather_code": first_h.get("weather_code", 0),
+            "condition": first_h.get("condition", "Unknown"),
+            "icon": first_h.get("icon", "cloudy"),
+            "units": {"temperature": "°C", "wind_speed": "km/h", "precipitation": "mm"},
+            "time": first_h.get("time"),
+            "source": "Open-Meteo Fallback"
+        }
+
+    # Final check: if still none, we must have data to avoid crashes
+    if not current:
+        raise ValueError("Critical Weather Error: Failed to fetch any current or forecast data.")
+
     comparison = compare_to_historical(current["temperature"], historical)
 
     insight = ""

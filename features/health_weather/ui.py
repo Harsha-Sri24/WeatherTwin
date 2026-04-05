@@ -32,6 +32,23 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_weather(city):
+    return fetch_weather(city)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_om_health(lat, lon):
+    return fetch_openmeteo_health_data(lat, lon)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_air_quality(lat, lon):
+    return fetch_air_quality(lat, lon)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_get_health_report(city, weather_data, health_condition_context, unit_p):
+    return run_async(get_health_report(city, weather_data, health_condition_context, unit_p))
+
+
 def render_health_weather_tab(city: str):
     """Render the Health & Wellness Weather Index tab."""
     st.markdown(f"## 🏥 Health & Wellness Dashboard: {city}")
@@ -72,7 +89,7 @@ def render_health_weather_tab(city: str):
 
     # 1. Fetch data
     with st.spinner("Analyzing your environment..."):
-        weather_data = fetch_weather(city)
+        weather_data = _cached_fetch_weather(city)
         if "error" in weather_data:
             st.error(f"Could not fetch weather data: {weather_data['error']}")
             return
@@ -81,18 +98,29 @@ def render_health_weather_tab(city: str):
         loc = weather_data.get("location", {})
         lat, lon = loc.get("lat"), loc.get("lon")
         
-        health_data = fetch_openmeteo_health_data(lat, lon) if lat and lon else {"error": "No coords"}
-        aq_data = fetch_air_quality(lat, lon) if lat and lon else {"error": "No coords"}
+        health_data = _cached_fetch_om_health(lat, lon) if lat and lon else {"error": "No coords"}
+        aq_data = _cached_fetch_air_quality(lat, lon) if lat and lon else {"error": "No coords"}
 
     # ────── TAB 1: WELLNESS FORECAST ──────
     with tab_forecast:
         user_profile = st.session_state.get("user_profile", {})
-        health_condition = user_profile.get("health_issues", "General wellness")
+        health_issues_str = user_profile.get("health_issues", "").strip()
+        if not health_issues_str:
+            health_condition_display = "General Wellness"
+            health_condition_context = "General wellness"
+        else:
+            # Clean up comma-separated issues
+            issues = [i.strip() for i in health_issues_str.split(",") if i.strip()]
+            if len(issues) > 1:
+                health_condition_display = ", ".join(issues[:-1]) + " & " + issues[-1]
+            else:
+                health_condition_display = issues[0].title() if issues else "General Wellness"
+            health_condition_context = health_issues_str
         
         with st.spinner("Generating personalized advice..."):
             try:
                 unit_p = st.session_state.get("temp_unit", "Celsius")
-                report = run_async(get_health_report(city, weather_data, health_condition, unit_p))
+                report = _cached_get_health_report(city, weather_data, health_condition_context, unit_p)
                 idx = report.indices
                 recommendation = report.recommendation
             except Exception as e:
@@ -104,7 +132,7 @@ def render_health_weather_tab(city: str):
         <div style="background: rgba(59, 130, 246, 0.1); padding: 1.5rem; border-radius: 0.8rem; border-left: 5px solid #3b82f6; color: var(--text-primary); margin-bottom: 2rem;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                 <div style="font-weight: bold; color: #60a5fa;">💡 Personalized Guidance</div>
-                <div style="font-size: 0.75rem; color: var(--text-secondary);">Optimized for: {health_condition}</div>
+                <div style="font-size: 0.75rem; color: var(--text-secondary);">Optimized for: {health_condition_display}</div>
             </div>
             {recommendation}
         </div>

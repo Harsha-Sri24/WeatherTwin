@@ -97,6 +97,7 @@ async def _get_consolidated_travel_data(destination: str, date_info: str, num_da
         "- 'packing': Category-based list with emojis. Include health/mode needs. Bullet points. Value must be a string.\n"
         "- 'itinerary': Day-by-day plan for {num_days} days. Use 'Day X' format with emojis. Concise. Value must be a string.\n"
         "- 'weather_diff': Comparison summary between home and destination. Value must be a string.\n"
+        "- 'health_advisory': Specific weather-health precautions based on the traveler's conditions ({health_issues}) and the destination's climate. If no health issues are provided, give general wellness advice for the destination's climate. Speak in natural, flowing sentences. Value must be a string.\n"
         "- 'risk': Risk assessment (Low/Moderate/High) with a brief reason. Value must be a string.\n\n"
         "Double check that every value in the JSON is a string."
     )
@@ -168,6 +169,7 @@ def get_travel_report(
             flight_risk=cached_data.get("risk", "Risk assessment unavailable"),
             itinerary=cached_data.get("itinerary", "Itinerary unavailable"),
             weather_diff=cached_data.get("weather_diff", "Comparison unavailable"),
+            health_advisory=cached_data.get("health_advisory", "Personalized health advice unavailable"),
             route_coords=[], # Real-time route is calculated below
             home_coords=None,
             dest_coords=None,
@@ -193,6 +195,7 @@ def get_travel_report(
             "packing": packing,
             "itinerary": itinerary,
             "weather_diff": weather_diff,
+            "health_advisory": _get_health_advisory(destination, date_info, health_issues),
             "risk": risk
         }
 
@@ -222,6 +225,7 @@ def get_travel_report(
         flight_risk=ai_data.get("risk", ""),
         itinerary=ai_data.get("itinerary", ""),
         weather_diff=ai_data.get("weather_diff", ""),
+        health_advisory=ai_data.get("health_advisory", "Stay hydrated and monitor local air quality."),
         route_coords=route_coords,
         home_coords=home_coords,
         dest_coords=dest_coords,
@@ -278,6 +282,18 @@ def _compare_weather(destination: str, home_city: str, date_info: str) -> str:
         ))
     except Exception as e:
         return f"Comparison unavailable: {e}"
+
+
+def _get_health_advisory(destination: str, date_info: str, health_issues: str) -> str:
+    health_ctx = f"Traveler has: {health_issues}." if health_issues else "General wellness advice."
+    try:
+        return _run_async(_llm_call(
+            f"You are a medical weather advisor. {health_ctx} Give 2-3 specific health/wellness tips for visiting {destination} {date_info} based on its climate. Max 300 chars.",
+            f"Health advice for {destination} {date_info}?",
+            temperature=0.6, max_tokens=200,
+        ))
+    except Exception:
+        return "Stay hydrated and monitor local conditions."
 
 
 def _assess_risk(home_city: str, destination: str, date_info: str, travel_mode: str) -> str:

@@ -47,6 +47,7 @@ cookie_manager = stx.CookieManager(key="wt_cookies")
 # Force-initialize all keys to avoid KeyError/AttributeError at the top level
 st.session_state.setdefault("weather_data", None)
 st.session_state.setdefault("current_city", None)
+st.session_state.setdefault("last_search_term", None)
 st.session_state.setdefault("chat_history", [])
 st.session_state.setdefault("show_map_picker", False)
 st.session_state.setdefault("auto_located", False)
@@ -65,11 +66,32 @@ st.session_state.setdefault("theme", "dark")
 st.session_state.setdefault("temp_unit", "C")
 
 
+
+
+
+
 def run_async(coro):
     """Helper to run an async function from a synchronous context."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+def run_async_stream(async_gen):
+    """Bridge for async generators to sync Streamlit write_stream."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        while True:
+            try:
+                chunk = loop.run_until_complete(async_gen.__anext__())
+                yield chunk
+            except StopAsyncIteration:
+                break
+    finally:
+        loop.close()
 
 
 
@@ -87,47 +109,57 @@ def format_temp(celsius_val, include_unit=True):
     return round(val)
 
 # ─── Data Fetching Helpers ───────────────────────
-def fetch_weather_by_city(city_name):
-    """Bridge to weather_service with monitoring."""
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_weather_by_city(city_name, profile_str):
+    """Bridge to weather_service with monitoring. (Cached)"""
     import time as _time
+    import ast
     start = _time.perf_counter()
+    user_profile = ast.literal_eval(profile_str) if profile_str else None
 
     try:
         geo = run_async(ws.geocode_city(city_name))
         if not geo:
-            st.error(f"City '{city_name}' not found")
+            # We don't want to use st.error inside cache if possible, but st.error is allowed in cached functions.
             if MONITORING_ENABLED:
-                mon.record_error("WeatherService", "CityNotFound", f"City '{city_name}' not found")
+                app_logger.warning(f"City '{city_name}' not found")
             return None
         
-        result = run_async(ws.fetch_full_weather_data(geo, os.getenv("GROQ_API_KEY", ""), st.session_state.get("user_profile")))
-        
+        result = run_async(ws.fetch_full_weather_data(geo, os.getenv("GROQ_API_KEY", ""), user_profile))
+        return result
+    except Exception as e:
+        if MONITORING_ENABLED:
+            app_logger.error(f"Weather Service Error: {e}")
+        return None
+
+def fetch_weather_by_city(city_name):
+    import time as _time
+    start = _time.perf_counter()
+    profile_str = str(st.session_state.get("user_profile", {}))
+    
+    result = _cached_fetch_weather_by_city(city_name, profile_str)
+    
+    if result:
         elapsed_ms = (_time.perf_counter() - start) * 1000
-        
-        if MONITORING_ENABLED and result:
+        if MONITORING_ENABLED:
             user_id = st.session_state.get("user_info", {}).get("id")
             mon.record_query(
                 user_id=user_id or 0,
                 city=city_name,
                 query_type="city_search",
-                lat=geo.get("latitude"),
-                lon=geo.get("longitude"),
+                lat=result.get("city", {}).get("latitude", 0),
+                lon=result.get("city", {}).get("longitude", 0),
                 response_time_ms=elapsed_ms,
             )
-            app_logger.info(f"Weather fetched for '{city_name}' in {elapsed_ms:.0f}ms",
-                            extra={"city": city_name, "latency_ms": elapsed_ms})
-            
-        return result
-    except Exception as e:
-        st.error(f"⚠️ Weather Service Error: Could not connect to API ({type(e).__name__}). Please check your internet connection.")
-        if MONITORING_ENABLED:
-            mon.record_error("WeatherService", type(e).__name__, str(e))
-        return None
+    elif result is None and city_name:
+        st.error(f"⚠️ Weather Service Error: Could not connect to API or city not found.")
+    return result
 
-def fetch_weather_by_coords(lat, lon):
-    """Bridge to weather_service with monitoring."""
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_weather_by_coords(lat, lon, profile_str):
     import time as _time
-    start = _time.perf_counter()
+    import ast
+    user_profile = ast.literal_eval(profile_str) if profile_str else None
 
     try:
         geo = run_async(ws.reverse_geocode(lat, lon))
@@ -135,29 +167,36 @@ def fetch_weather_by_coords(lat, lon):
             geo = {"name": f"{lat:.2f}°, {lon:.2f}°", "country": "", "admin1": "",
                    "latitude": lat, "longitude": lon, "timezone": "auto", "population": None}
         
-        result = run_async(ws.fetch_full_weather_data(geo, os.getenv("GROQ_API_KEY", ""), st.session_state.get("user_profile")))
-        
+        result = run_async(ws.fetch_full_weather_data(geo, os.getenv("GROQ_API_KEY", ""), user_profile))
+        return result
+    except Exception as e:
+        return None
+
+def fetch_weather_by_coords(lat, lon):
+    import time as _time
+    start = _time.perf_counter()
+    profile_str = str(st.session_state.get("user_profile", {}))
+    
+    result = _cached_fetch_weather_by_coords(lat, lon, profile_str)
+    
+    if result:
         elapsed_ms = (_time.perf_counter() - start) * 1000
-        
-        if MONITORING_ENABLED and result:
+        if MONITORING_ENABLED:
             user_id = st.session_state.get("user_info", {}).get("id")
             mon.record_query(
                 user_id=user_id or 0,
-                city=geo.get("name", "Unknown"),
+                city=result.get("city", {}).get("name", "Unknown"),
                 query_type="coords_search",
                 lat=lat,
                 lon=lon,
                 response_time_ms=elapsed_ms,
             )
-            app_logger.info(f"Weather fetched for ({lat}, {lon}) in {elapsed_ms:.0f}ms",
-                            extra={"latency_ms": elapsed_ms})
-            
-        return result
-    except Exception as e:
-        st.error(f"⚠️ Weather Service Error: Could not connect to API ({type(e).__name__}). Please check your internet connection.")
-        if MONITORING_ENABLED:
-            mon.record_error("WeatherService", type(e).__name__, str(e))
-        return None
+    elif result is None:
+        st.error(f"⚠️ Weather Service Error: Could not connect to API.")
+    return result
+
+
+
 
 
 
@@ -233,40 +272,27 @@ DARK_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-/* Dark theme overrides */
+/* Main App Background & Typography */
 .stApp {
     background: linear-gradient(180deg, #0a0e1a 0%, #111827 50%, #0f172a 100%);
     font-family: 'Inter', sans-serif;
 }
-
-/* Hide default streamlit elements */
 footer {visibility: hidden;}
-
-/* Remove excess top padding */
 .block-container { padding-top: 1rem !important; }
+
+/* Sidebar & Header */
 section[data-testid="stSidebar"] {
-    background-color: #0d121c !important; /* Slightly darker than gradient */
+    background-color: #0d121c !important; 
     border-right: 1px solid rgba(148,163,184,0.06) !important;
 }
-section[data-testid="stSidebar"] > div:first-child { padding-top: 1rem; }
-
-/* Streamlit header — keep visible for sidebar toggle */
 header[data-testid="stHeader"] {
     background: rgba(10,14,26,0.85) !important;
     backdrop-filter: blur(12px);
     border-bottom: 1px solid rgba(148,163,184,0.08);
-    color: #94a3b8;
 }
 
-/* Custom header */
-.wt-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 0;
-    border-bottom: 1px solid rgba(148,163,184,0.1);
-    margin-bottom: 24px;
-}
+/* Logo & Branding */
+.wt-header { display: flex; align-items: center; gap: 12px; padding: 16px 0; border-bottom: 1px solid rgba(148,163,184,0.1); margin-bottom: 24px; }
 .wt-logo-icon {
     width: 42px; height: 42px;
     background: linear-gradient(135deg, #3b82f6, #8b5cf6);
@@ -280,12 +306,9 @@ header[data-testid="stHeader"] {
     background: linear-gradient(135deg, #3b82f6, #8b5cf6);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
-.wt-logo-tag {
-    font-size: 0.7rem; color: #64748b;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
+.wt-logo-tag { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
 
-/* Card styling */
+/* Dashboard Cards */
 .wt-card {
     background: rgba(17, 24, 39, 0.7);
     border: 1px solid rgba(148,163,184,0.1);
@@ -294,433 +317,71 @@ header[data-testid="stHeader"] {
     backdrop-filter: blur(12px);
     transition: 250ms;
 }
-.wt-card:hover {
-    border-color: rgba(59,130,246,0.3);
-    box-shadow: 0 0 30px rgba(59,130,246,0.15);
-}
+.wt-card:hover { border-color: rgba(59,130,246,0.3); box-shadow: 0 0 30px rgba(59,130,246,0.15); }
 
-/* Delta chips for imported features */
-.chip-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-.delta-chip { display:inline-block; padding:2px 10px; border-radius:6px; font-size:0.75rem; font-weight:600; margin-top:4px; }
-.delta-good { background:rgba(16,185,129,0.15); color:#10b981; }
-.delta-warn { background:rgba(245,158,11,0.15); color:#f59e0b; }
-.delta-bad { background:rgba(244,63,94,0.15); color:#f43f5e; }
-
-/* Temperature display */
-.wt-temp-big {
-    font-size: 4rem; font-weight: 800; line-height: 1;
-    background: linear-gradient(135deg, #06b6d4, #3b82f6);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-}
-.wt-temp-feels {
-    font-size: 0.85rem; color: #64748b; margin-top: 4px;
-}
-
-/* Condition display */
-.wt-condition-icon { font-size: 3.5rem; margin-bottom: 4px; }
-.wt-condition-text { font-size: 1.3rem; font-weight: 600; color: #f1f5f9; }
-.wt-location { font-size: 0.85rem; color: #94a3b8; margin-top: 2px; }
-
-/* Detail items */
-.wt-detail {
-    background: rgba(255,255,255,0.04);
-    border-radius: 8px;
-    padding: 12px 14px;
-    text-align: center;
-}
-.wt-detail-icon { font-size: 1.2rem; }
-.wt-detail-label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; }
-.wt-detail-value { font-size: 1rem; font-weight: 600; color: #f1f5f9; }
-
-/* Forecast card */
-.wt-forecast-card {
-    background: rgba(17,24,39,0.7);
-    border: 1px solid rgba(148,163,184,0.1);
-    border-radius: 12px;
-    padding: 14px 10px;
-    text-align: center;
-    min-width: 110px;
-}
+/* Weather Specific Components */
+.wt-temp-big { font-size: 4rem; font-weight: 800; line-height: 1; background: linear-gradient(135deg, #06b6d4, #3b82f6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.wt-section-title { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 16px; margin-top: 24px; }
+.wt-forecast-card { background: rgba(17,24,39,0.7); border: 1px solid rgba(148,163,184,0.1); border-radius: 12px; padding: 14px 10px; text-align: center; }
 .wt-forecast-day { font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; }
-.wt-forecast-icon { font-size: 1.8rem; margin: 6px 0; }
 .wt-forecast-high { font-size: 1.1rem; font-weight: 700; color: #f1f5f9; }
 .wt-forecast-low { font-size: 0.85rem; color: #64748b; }
-.wt-forecast-precip { font-size: 0.7rem; color: #06b6d4; margin-top: 4px; }
 
-/* Severity badges */
-.wt-badge {
-    display: inline-block;
-    font-size: 0.65rem; font-weight: 600;
-    padding: 3px 10px; border-radius: 20px;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
-.wt-badge-normal { background: rgba(16,185,129,0.15); color: #10b981; }
-.wt-badge-mild { background: rgba(245,158,11,0.15); color: #f59e0b; }
-.wt-badge-moderate { background: rgba(249,115,22,0.15); color: #f97316; }
-.wt-badge-significant { background: rgba(244,63,94,0.15); color: #f43f5e; }
-.wt-badge-extreme { background: rgba(244,63,94,0.25); color: #f43f5e; border: 1px solid rgba(244,63,94,0.3); }
-
-/* AI Insight banner */
-.wt-insight {
-    background: linear-gradient(145deg, rgba(59,130,246,0.05), rgba(139,92,246,0.05));
-    border: 1px solid rgba(59,130,246,0.3);
-    border-radius: 16px;
-    padding: 16px 20px;
-    margin-bottom: 20px;
-}
-.wt-insight-label { font-size: 0.65rem; font-weight: 600; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px; }
-
-/* Stat items */
-.wt-stat {
-    background: rgba(255,255,255,0.04);
-    border-radius: 8px;
-    padding: 10px 12px;
-}
-.wt-stat-label { font-size: 0.68rem; color: #64748b; text-transform: uppercase; }
-.wt-stat-value { font-size: 1.05rem; font-weight: 600; color: #f1f5f9; }
-
-/* Section title */
-.wt-section-title {
-    font-size: 0.8rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 1px;
-    color: #64748b; margin-bottom: 16px;
-}
-
-/* Map container */
-.wt-map-hint {
-    font-size: 0.75rem; color: #64748b;
-    text-align: center; margin-top: 6px;
-    font-style: italic;
-}
-
-/* Metric overrides */
-[data-testid="stMetric"] {
-    background: rgba(255,255,255,0.04);
-    border-radius: 8px;
-    padding: 12px;
-}
-[data-testid="stMetricLabel"] { color: #64748b !important; }
-[data-testid="stMetricValue"] { color: #f1f5f9 !important; }
-
-/* Tab styling — subtle fill variant */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    background: transparent;
-    border-bottom: 1px solid rgba(148,163,184,0.1);
-    padding: 0 0 4px 0;
-    border-radius: 0;
-}
-.stTabs [data-baseweb="tab"] {
-    border-radius: 8px;
-    color: #64748b;
-    font-weight: 500;
-    font-size: 0.82rem;
-    padding: 8px 16px;
-    transition: color 0.2s, background 0.2s;
-    border-bottom: none;
-}
-.stTabs [data-baseweb="tab"]:hover {
-    color: #cbd5e1;
-    background: rgba(255,255,255,0.04);
-}
-.stTabs [aria-selected="true"] {
-    background: rgba(59,130,246,0.12) !important;
-    color: #60a5fa !important;
-    font-weight: 600;
-}
-
-/* Chat styling */
-.stChatMessage {
-    background: rgba(17,24,39,0.7) !important;
-    border: 1px solid rgba(148,163,184,0.1) !important;
-    border-radius: 12px !important;
-}
-
-/* folium iframe */
-iframe {
-    border-radius: 16px !important;
-    border: 1px solid rgba(148,163,184,0.1) !important;
-}
-
-/* Primary buttons (blue/purple gradient) */
-.stButton > button[data-testid="baseButton-primary"] {
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border-radius: 10px !important;
-    padding: 8px 20px !important;
-    font-size: 0.88rem !important;
-    letter-spacing: 0.2px !important;
-    transition: opacity 0.18s, box-shadow 0.18s, transform 0.12s !important;
-}
-.stButton > button[data-testid="baseButton-primary"]:hover {
-    opacity: 0.92 !important;
-    box-shadow: 0 6px 24px rgba(59,130,246,0.35) !important;
-    transform: translateY(-1px) !important;
-}
-.stButton > button[data-testid="baseButton-primary"]:active {
-    transform: translateY(0px) !important;
-}
-
-/* Secondary/default buttons (white glass) */
-.stButton > button[data-testid="baseButton-secondary"] {
-    background: rgba(255, 255, 255, 0.04) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    color: #f1f5f9 !important;
-    font-weight: 500 !important;
-    border-radius: 10px !important;
-    padding: 8px 20px !important;
-    font-size: 0.88rem !important;
-    transition: all 0.2s !important;
-}
-.stButton > button[data-testid="baseButton-secondary"]:hover {
-    background: rgba(255, 255, 255, 0.12) !important;
-    border-color: rgba(255, 255, 255, 0.25) !important;
-    color: #ffffff !important;
-}
-.stButton > button[data-testid="baseButton-secondary"]:active {
-    background: rgba(255, 255, 255, 0.05) !important;
-}
-
-/* Favorite button specific color override */
-[data-testid="element-container"]:has(.fav-heart-active) + [data-testid="element-container"] button,
-[data-testid="element-container"]:has(.fav-heart-active) + [data-testid="element-container"] button:hover,
-[data-testid="stElementContainer"]:has(.fav-heart-active) + [data-testid="stElementContainer"] button,
-[data-testid="stElementContainer"]:has(.fav-heart-active) + [data-testid="stElementContainer"] button:hover {
-    color: #ef4444 !important;
-    border-color: rgba(239, 68, 68, 0.3) !important;
-    background: rgba(239, 68, 68, 0.08) !important;
-}
-[data-testid="element-container"]:has(.fav-heart-active) + [data-testid="element-container"] button span,
-[data-testid="element-container"]:has(.fav-heart-active) + [data-testid="element-container"] button p,
-[data-testid="element-container"]:has(.fav-heart-active) + [data-testid="element-container"] button svg,
-[data-testid="stElementContainer"]:has(.fav-heart-active) + [data-testid="stElementContainer"] button span,
-[data-testid="stElementContainer"]:has(.fav-heart-active) + [data-testid="stElementContainer"] button p,
-[data-testid="stElementContainer"]:has(.fav-heart-active) + [data-testid="stElementContainer"] button svg {
-    color: #ef4444 !important;
-    fill: #ef4444 !important;
-}
-
-/* Form submit buttons (always primary) */
-.stFormSubmitButton > button {
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border-radius: 10px !important;
-    padding: 10px 20px !important;
-    font-size: 0.9rem !important;
-    letter-spacing: 0.2px !important;
-    transition: opacity 0.18s, box-shadow 0.18s, transform 0.12s !important;
-    width: 100% !important;
-}
-.stFormSubmitButton > button:hover {
-    opacity: 0.92 !important;
-    box-shadow: 0 6px 24px rgba(59,130,246,0.35) !important;
-    transform: translateY(-1px) !important;
-}
-
-/* Text input — flat 8px radius, NOT rounded */
+/* Form & Input Styling */
 .stTextInput input {
     background: rgba(15,23,42,0.7) !important;
     border: 1px solid rgba(148,163,184,0.12) !important;
     border-radius: 8px !important;
     color: #f1f5f9 !important;
     padding: 10px 14px !important;
-    font-size: 0.88rem !important;
-    transition: border-color 0.2s, box-shadow 0.2s !important;
 }
-.stTextInput input:focus {
-    border-color: rgba(59,130,246,0.5) !important;
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.1) !important;
-    outline: none !important;
-}
-.stTextInput input::placeholder {
-    color: #94a3b8 !important; /* Made significantly brighter */
-    opacity: 0.8 !important;
-}
-/* Auth page — full-screen centered card */
-.auth-page-bg {
-    position: fixed;
-    inset: 0;
-    background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(59,130,246,0.18) 0%, transparent 60%),
-                radial-gradient(ellipse 60% 40% at 80% 80%, rgba(139,92,246,0.12) 0%, transparent 55%),
-                #070b14;
-    z-index: 0;
-}
-.auth-outer {
-    display: flex;
-    min-height: 100vh;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-}
-.auth-card {
-    width: 100%;
-    max-width: 440px;
-    background: rgba(13, 19, 35, 0.85);
-    border: 1px solid rgba(148,163,184,0.1);
-    border-radius: 18px;
-    padding: 40px 36px 36px 36px;
-    backdrop-filter: blur(28px);
-    box-shadow: 0 0 0 1px rgba(255,255,255,0.03) inset,
-                0 24px 64px rgba(0,0,0,0.6),
-                0 0 80px rgba(59,130,246,0.06);
-}
-.auth-logo {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin-bottom: 28px;
-}
-.auth-logo-icon {
-    width: 52px; height: 52px;
-    border-radius: 14px;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.6rem;
-    box-shadow: 0 8px 20px rgba(59,130,246,0.35);
-    margin-bottom: 14px;
-}
-.auth-headline {
-    font-size: 1.65rem;
-    font-weight: 700;
-    color: #f8fafc;
-    text-align: center;
-    margin: 0 0 6px 0;
-    letter-spacing: -0.3px;
-}
-.auth-subline {
-    font-size: 0.83rem;
-    color: #64748b;
-    text-align: center;
-    margin: 0;
-}
-.auth-subline a {
-    color: #60a5fa;
-    text-decoration: none;
-    font-weight: 500;
-    cursor: pointer;
-}
-.auth-subline a:hover { text-decoration: underline; }
+.stTextInput input:focus { border-color: rgba(59,130,246,0.5) !important; box-shadow: 0 0 0 3px rgba(59,130,246,0.1) !important; }
 
+/* Autocomplete Search Dropdown */
+.search-container { position: relative; width: 100%; }
+.search-suggestions {
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    background: #1e293b;
+    border: 1px solid rgba(148,163,184,0.15);
+    border-radius: 8px;
+    margin-top: 4px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    z-index: 10000;
+    overflow: hidden;
+}
+.search-suggestion-btn button {
+    width: 100% !important;
+    text-align: left !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid rgba(148,163,184,0.08) !important;
+    border-radius: 0 !important;
+    padding: 10px 14px !important;
+    color: #f1f5f9 !important;
+    justify-content: flex-start !important;
+}
+.search-suggestion-btn button:hover { background: rgba(59,130,246,0.1) !important; }
+.search-highlight { color: #60a5fa; font-weight: 700; }
 
-/* Field labels */
-.auth-label {
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #94a3b8;
-    margin-bottom: 5px;
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
-}
+/* Tabs & Navigation */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid rgba(148,163,184,0.1); }
+.stTabs [data-baseweb="tab"] { border-radius: 8px; color: #64748b; font-weight: 500; font-size: 0.82rem; padding: 8px 16px; border-bottom: none; }
+.stTabs [aria-selected="true"] { background: rgba(59,130,246,0.12) !important; color: #60a5fa !important; }
 
-/* Divider */
-.auth-divider {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 18px 0;
-    color: #334155;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-}
-.auth-divider::before, .auth-divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: rgba(148,163,184,0.1);
-}
+/* Auth Views */
+.auth-page-bg { position: fixed; inset: 0; background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(59,130,246,0.18) 0%, transparent 60%), #070b14; z-index: 0; }
+.auth-card { width: 100%; max-width: 440px; background: rgba(13, 19, 35, 0.85); border: 1px solid rgba(148,163,184,0.1); border-radius: 18px; padding: 40px 36px; backdrop-filter: blur(28px); box-shadow: 0 24px 64px rgba(0,0,0,0.6); }
+.auth-logo-icon { width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #3b82f6, #8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; box-shadow: 0 8px 20px rgba(59,130,246,0.35); margin-bottom: 14px; }
+.auth-headline { font-size: 1.65rem; font-weight: 700; color: #f8fafc; text-align: center; margin-bottom: 6px; }
+.auth-subline { font-size: 0.83rem; color: #64748b; text-align: center; }
+.auth-subline a { color: #60a5fa; text-decoration: none; font-weight: 500; }
+.auth-label { font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; }
 
-/* Legacy classes kept for compat */
-.login-divider {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 16px 0;
-    color: #475569;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-.login-divider::before, .login-divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: rgba(148,163,184,0.12);
-}
-.login-feature-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-    margin-top: 24px;
-}
-.login-feature-item {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(148,163,184,0.06);
-    border-radius: 10px;
-    padding: 16px 8px;
-    text-align: center;
-    transition: border-color 0.2s;
-}
-.login-feature-item:hover { border-color: rgba(59,130,246,0.2); }
-.login-feature-item .feat-icon { font-size: 1.5rem; margin-bottom: 6px; }
-.login-feature-item .feat-label { font-size: 0.7rem; color: #94a3b8; font-weight: 500; }
-.login-brand {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    padding: 40px 20px;
-}
-.login-brand-title {
-    font-size: 2.8rem;
-    font-weight: 800;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin: 12px 0 8px 0;
-}
-.login-brand-desc {
-    font-size: 0.95rem;
-    color: #94a3b8;
-    text-align: center;
-    line-height: 1.6;
-    max-width: 320px;
-}
-.login-card {
-    background: rgba(15, 23, 42, 0.6);
-    border: 1px solid rgba(148,163,184,0.08);
-    border-radius: 18px;
-    padding: 36px 32px;
-    backdrop-filter: blur(24px);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
-}
-.login-card-header { text-align: center; margin-bottom: 28px; }
-.login-card-header h2 { font-size: 1.6rem; font-weight: 700; color: #f8fafc; margin: 0 0 6px 0; }
-.login-card-header p { font-size: 0.85rem; color: #64748b; margin: 0; }
-/* Reminder card styling */
-.wt-reminder-card {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(148,163,184,0.1);
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 10px;
-    position: relative;
-    border-left: 3px solid #3b82f6;
-}
-.wt-reminder-title { font-weight: 700; font-size: 0.9rem; color: #f1f5f9; margin-bottom: 2px; }
-.wt-reminder-meta { font-size: 0.72rem; color: #64748b; display: flex; align-items: center; gap: 4px; }
-.wt-reminder-delete { 
-    color: #ef4444; 
-    font-size: 0.8rem; 
-    cursor: pointer; 
-    opacity: 0.6;
-    transition: opacity 0.2s;
-}
+/* Reminders */
+.wt-reminder-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(148,163,184,0.1); border-radius: 12px; padding: 12px; margin-bottom: 10px; border-left: 3px solid #3b82f6; }
+.wt-reminder-title { font-weight: 700; font-size: 0.9rem; color: #f1f5f9; }
+.wt-reminder-delete { color: #ef4444; font-size: 0.8rem; cursor: pointer; opacity: 0.6; transition: opacity 0.2s; }
 .wt-reminder-delete:hover { opacity: 1; }
 </style>
 """
@@ -794,6 +455,7 @@ LIGHT_CSS = """
     </style>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css');
 
 /* Dark theme overrides */
 .stApp {
@@ -1143,6 +805,46 @@ iframe {
 .stTextInput input::placeholder {
     color: var(--text-secondary) !important; /* Made significantly brighter */
     opacity: 0.8 !important;
+}
+
+/* Header Search Bar Styling */
+div[data-testid="stHeader"] {{
+    z-index: 1000001 !important;
+}}
+/* target the second column in the header where search sits */
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) label {
+    display: none !important;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stTextInput"] input {
+    background: rgba(15, 23, 42, 0.6) !important;
+    border: 1px solid rgba(148, 163, 184, 0.2) !important;
+    border-radius: 10px !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    padding-right: 40px !important;
+    color: var(--text-primary) !important;
+    font-size: 0.88rem !important;
+    backdrop-filter: blur(20px) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+    transition: all 0.2s ease !important;
+}
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stTextInput"] input:focus {
+    border-color: rgba(59, 130, 246, 0.5) !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1), 0 12px 32px rgba(0,0,0,0.5) !important;
+    background: rgba(15, 23, 42, 0.8) !important;
+}
+/* Magnifying glass via bg image */
+div[data-testid="stHorizontalBlock"] > div:nth-child(2) div[data-testid="stTextInput"]::after {
+    content: '\f002';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #94a3b8;
+    pointer-events: none;
+    font-size: 0.9rem;
 }
 /* Auth page — full-screen centered background */
 .auth-page-bg {
@@ -1733,9 +1435,10 @@ with st.sidebar:
         com_idx = com_opts.index(p.get("commute_type", "Own Vehicle")) if p.get("commute_type") in com_opts else 0
         commute = st.selectbox("Commute Mode", com_opts, index=com_idx)
 
-        home_address_input = st.text_input("Home Address", value=home_address, placeholder="City, Country")
+        from frontend.city_autocomplete import city_autocomplete
+        home_address_input = city_autocomplete("Home Address", default_value=home_address, placeholder="City, Country", key="home_addr")
 
-        health = st.text_area("Health Factors", value=p.get("health_issues", "") or "", placeholder="e.g. Asthma, Allergies")
+        health = st.text_area("Health Factors", value=p.get("health_issues", "") or "", placeholder="Enter health issues (e.g. Asthma, Allergies)", help="List your health concerns (separated by commas) so the AI advisor can personalize your insights.")
         
         if st.button(":material/save: Save", use_container_width=True, key="save_profile_btn"):
             with st.spinner("Saving..."):
@@ -1966,38 +1669,45 @@ def _detect_severe(cur):
     return alerts
 
 
-
-
 # ─── Initialize Database tables ─────────────────
 try:
     db.init_tables()
 except Exception:
-    pass  # Will fail until user adds credentials — that's OK
+    pass
 
-# ─── Header: Logo + Search + User + Logout ─────────────────────────
-user_display = st.session_state.user_info["username"] if st.session_state.user_info else ""
+# ─── Header: Logo + Search + User + ... ──────────────────────────
+user_display = st.session_state.user_info["username"] if st.session_state.user_info else "Guest"
 _user_initial = user_display[0].upper() if user_display else "U"
 
-hdr_logo, hdr_search, hdr_search_btn, hdr_user, hdr_temp, hdr_theme, hdr_logout = st.columns([2, 3, 0.3, 1, 0.4, 0.4, 0.4])
+hdr_logo, hdr_search, hdr_user, hdr_temp, hdr_theme, hdr_logout = st.columns([1.5, 4.5, 2, 0.8, 0.4, 0.4])
+
 with hdr_logo:
     st.markdown(f"""
     <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:1.6rem;">🌤️</span>
         <div>
             <div style="font-size:1rem;font-weight:700;color:var(--text-primary);line-height:1.1;">WeatherTwin</div>
-            <div style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">AI Climate Intelligence</div>
+            <div style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">AI Intelligence</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
+
 with hdr_search:
-    city_input = st.text_input(
-        "Search",
-        placeholder="Search any city — New York, Tokyo, London...",
-        label_visibility="collapsed",
-        key="search_input"
-    )
-with hdr_search_btn:
-    search_clicked = st.button(":material/search:", use_container_width=True, key="search_btn")
+    from frontend.city_autocomplete import city_autocomplete
+    # Explicitly pass the current city as default if available to keep sync
+    default_search = st.session_state.get("last_search_term") or st.session_state.get("current_city") or ""
+    
+    s_city = city_autocomplete("Search City", default_value=default_search, placeholder="Search city (e.g. Tokyo, London, Paris)...", key="hdr_city_search")
+    
+    # Trigger search only if the term has actually changed
+    if s_city and s_city != st.session_state.get("last_search_term"):
+        with st.spinner(f"Loading {s_city}..."):
+            data = fetch_weather_by_city(s_city)
+            if data:
+                st.session_state.weather_data = data
+                st.session_state.current_city = data["city"]["name"]
+                st.session_state.last_search_term = s_city
+                st.rerun()
 
 with hdr_user:
     st.markdown(f"""
@@ -2057,20 +1767,23 @@ if not st.session_state.auto_located and not st.session_state.weather_data:
     else:
         st.session_state.auto_located = True
 
-# Handle city search
-if search_clicked and city_input:
-    with st.spinner("Analyzing climate data..."):
-        data = fetch_weather_by_city(city_input)
-        if data:
-            st.session_state.weather_data = data
-            st.session_state.current_city = data["city"]["name"]
-            st.rerun()
 
 
 
-if MONITORING_ENABLED:
-    mon.init_monitoring_tables()
-    mon.start_flush_thread(30)
+
+@st.cache_resource(show_spinner=False)
+def setup_monitoring():
+    if MONITORING_ENABLED:
+        try:
+            mon.init_monitoring_tables()
+            mon.start_flush_thread(30)
+            return True
+        except Exception as e:
+            app_logger.error(f"Monitoring setup failed: {e}")
+            return False
+    return False
+
+_ = setup_monitoring()
 
 # ─── Tabs ────────────────────────────────────────
 tab_dashboard, tab_compare, tab_health, tab_agri, tab_travel, tab_rec, tab_sim, tab_news, tab_public_health, tab_monitoring = st.tabs([
@@ -2112,9 +1825,12 @@ with tab_dashboard:
             name = f["name"]
             if name != city['name']:
                 if name not in st.session_state.fav_weather_cache:
-                    f_data = fetch_weather_by_coords(f["lat"], f["lon"])
-                    if f_data:
-                        st.session_state.fav_weather_cache[name] = f_data["current"]
+                    try:
+                        curr_data = run_async(ws.get_current_weather(f["lat"], f["lon"]))
+                        if curr_data:
+                            st.session_state.fav_weather_cache[name] = curr_data
+                    except Exception:
+                        pass
                 f_curr = st.session_state.fav_weather_cache.get(name)
                 if f_curr:
                     f_alerts = _detect_severe(f_curr)
@@ -2144,7 +1860,7 @@ with tab_dashboard:
 
         # ─── Check active favorite status ─────────────
         c_lat, c_lon = city["latitude"], city["longitude"]
-        is_fav = any(abs(f["lat"] - c_lat) < 0.001 and abs(f["lon"] - c_lon) < 0.001 for f in st.session_state.user_favorites)
+        is_fav = any(abs(f["lat"] - c_lat) < 0.05 and abs(f["lon"] - c_lon) < 0.05 for f in st.session_state.user_favorites)
         
         # ─── Current Weather Location & Nav Actions ──
         location_text = f"{city['name']}{', ' + city.get('admin1', '') if city.get('admin1') else ''}, {city.get('country', '')}"
@@ -2162,7 +1878,22 @@ with tab_dashboard:
                 st.markdown(f'<div style="font-size:1.8rem; font-weight:700; color:var(--text-primary); margin-bottom:2px;">{location_text}</div>', unsafe_allow_html=True)
             with fav_col:
                 if is_fav:
-                    st.markdown('<div class="fav-heart-active"></div>', unsafe_allow_html=True)
+                    st.markdown("""
+                        <style>
+                        /* Forcibly target the active favorite button (isolated in this column) */
+                        div[data-testid="column"]:nth-of-type(2) button,
+                        button[title="Remove from favorites"] {
+                            color: #ef4444 !important;
+                            border-color: rgba(239, 68, 68, 0.3) !important;
+                            background-color: rgba(239, 68, 68, 0.08) !important;
+                        }
+                        div[data-testid="column"]:nth-of-type(2) button *,
+                        button[title="Remove from favorites"] * {
+                            color: #ef4444 !important;
+                            fill: #ef4444 !important;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
                 if st.button(fav_icon, key="fav_inline_btn", help=fav_tip):
                     with st.spinner("Updating..."):
                         if is_fav:
@@ -2527,11 +2258,12 @@ with tab_compare:
 
     comp_col1, comp_col2, comp_col3 = st.columns([3, 1, 3])
     with comp_col1:
-        compare_city1 = st.text_input("City 1", placeholder="e.g. New York", label_visibility="collapsed", key="comp1")
+        from frontend.city_autocomplete import city_autocomplete
+        compare_city1 = city_autocomplete("City 1", placeholder="e.g. New York", key="comp1")
     with comp_col2:
         st.markdown("<div style='text-align:center;font-weight:700;color:var(--text-secondary);padding-top:8px;'>VS</div>", unsafe_allow_html=True)
     with comp_col3:
-        compare_city2 = st.text_input("City 2", placeholder="e.g. London", label_visibility="collapsed", key="comp2")
+        compare_city2 = city_autocomplete("City 2", placeholder="e.g. London", key="comp2")
 
     if st.button(":material/compare_arrows: Compare", use_container_width=True, key="compare_btn"):
         if not compare_city1 or not compare_city2:
@@ -2887,56 +2619,91 @@ with st.popover("💬", use_container_width=False):
                     st.markdown(msg["content"])
                     
         if prompt := st.chat_input("Ask a question..."):
+            # 1. Add user message to history
             st.session_state.chat_history.append({"role": "user", "content": prompt})
+            
+            # 2. IMMEDIATELY render user message in the UI (since we aren't rerunning yet)
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # 3. Start Assistant Logic
+                with st.chat_message("assistant", avatar="🤖"):
+                    groq_key = os.getenv("GROQ_API_KEY", "")
+                    if not groq_key or groq_key == "your_groq_api_key_here":
+                        st.error("⚠️ GROQ_API_KEY missing. Please check .env.")
+                        answer = "⚠️ GROQ_API_KEY missing."
+                    else:
+                        # --- Robust City Detection (v2) ---
+                        target_city = st.session_state.current_city
+                        import re
+                        city_keywords = r'(?:in|at|for|about|weather in|climate in|weather for|climate for)'
+                        city_match = re.search(f'{city_keywords}\\s+([a-zA-Z\\s,]+)', prompt, re.IGNORECASE)
+                        
+                        # --- Database Session Management ---
+                        if st.session_state.active_chat_id is None:
+                            title = (prompt[:47] + "...") if len(prompt) > 50 else prompt
+                            s_res = db.create_chat_session(st.session_state.user_info["id"], title)
+                            if s_res["success"]:
+                                st.session_state.active_chat_id = s_res["session_id"]
+                                db.add_chat_message(st.session_state.active_chat_id, "user", prompt)
+                        else:
+                            db.add_chat_message(st.session_state.active_chat_id, "user", prompt)
+
+                        status_container = st.empty()
+                        try:
+                            import backend.weather_service as ws
+                            import backend.llm_service as llm
+                            
+                            target_geo = None
+                            if city_match:
+                                candidate = city_match.group(1).strip().title()
+                                status_container.info(f"🔍 Searching for climate data in '{candidate}'...")
+                                detected_geo = run_async(ws.geocode_city(candidate))
+                                if detected_geo:
+                                    target_city = detected_geo["name"]
+                                    target_geo = detected_geo
+                                else:
+                                    status_container.warning(f"⚠️ Could not find '{candidate}'. Falling back to dashboard...")
+                            
+                            if not target_geo and st.session_state.current_city:
+                                status_container.info(f"📡 Using dashboard context: {st.session_state.current_city}...")
+                                target_geo = run_async(ws.geocode_city(st.session_state.current_city))
+
+                            if target_geo:
+                                status_container.info(f"🌡️ Gathering climate intelligence for {target_city}...")
+                                weather_data = run_async(ws.fetch_full_weather_data(target_geo, ""))
+                                
+                                rag_ctx = llm.build_rag_context(
+                                    target_geo, 
+                                    current=weather_data.get("current"), 
+                                    forecast=weather_data.get("forecast"),
+                                    historical=weather_data.get("historical"),
+                                    comparison=weather_data.get("comparison")
+                                )
+                                
+                                status_container.empty()
+                                
+                                history_to_send = st.session_state.chat_history[-8:-1]
+                                stream_gen = run_async_stream(llm.chat_with_context_stream(prompt, rag_ctx, history_to_send))
+                                answer = st.write_stream(stream_gen)
+                            else:
+                                status_container.empty()
+                                answer = "I don't have enough location data. Please search a city first!"
+                                st.markdown(answer)
+                                
+                        except Exception as e:
+                            status_container.empty()
+                            answer = f"Error: {e}"
+                            st.error(answer)
+                
+                # 4. Save assistant response and final rerun to sync everything
+                st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                if st.session_state.active_chat_id is not None:
+                    db.add_chat_message(st.session_state.active_chat_id, "assistant", answer)
+            
             st.rerun()
 
-# ─── Chat execution (after rerun inside the popover) ───
-if len(st.session_state.chat_history) > 0 and st.session_state.chat_history[-1]["role"] == "user":
-    prompt = st.session_state.chat_history[-1]["content"]
-    
-    # Check if this is the FIRST message of a new chat
-    if st.session_state.active_chat_id is None:
-        title = (prompt[:47] + "...") if len(prompt) > 50 else prompt
-        s_res = db.create_chat_session(st.session_state.user_info["id"], title)
-        if s_res["success"]:
-            st.session_state.active_chat_id = s_res["session_id"]
-            db.add_chat_message(st.session_state.active_chat_id, "user", prompt)
-    else:
-        db.add_chat_message(st.session_state.active_chat_id, "user", prompt)
-
-    with st.spinner("AI is thinking..."):
-        groq_key = os.getenv("GROQ_API_KEY", "")
-        if not groq_key or groq_key == "your_groq_api_key_here":
-            answer = "⚠️ GROQ_API_KEY missing. Please check .env."
-        else:
-            city_name = st.session_state.current_city
-            if city_name:
-                try:
-                    import backend.weather_service as ws
-                    import backend.llm_service as llm
-                    
-                    geo = run_async(ws.geocode_city(city_name))
-                    if geo:
-                        cur = run_async(ws.get_current_weather(geo["latitude"], geo["longitude"]))
-                        fc = run_async(ws.get_forecast(geo["latitude"], geo["longitude"], 7))
-                        hist = run_async(ws.get_historical_summary(geo["latitude"], geo["longitude"], 5))
-                        comp = ws.compare_to_historical(cur["temperature"], hist)
-                        rag_ctx = llm.build_rag_context(geo, current=cur, forecast=fc, historical=hist, comparison=comp)
-                        result = run_async(llm.chat_with_context(prompt, rag_ctx, st.session_state.chat_history[-8:-1]))
-                        answer = result.get("answer", "Error resolving response.")
-                        if result.get("sources"):
-                            answer += f"\n\n*Sources: {', '.join(result['sources'])}*"
-                    else:
-                        answer = "I couldn't locate your selected city in the database."
-                except Exception as e:
-                    answer = f"Error: {e}"
-            else:
-                answer = "I don't have enough location data. Please search a city first!"
-        
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
-        if st.session_state.active_chat_id is not None:
-            db.add_chat_message(st.session_state.active_chat_id, "assistant", answer)
-        st.rerun()
 
 
 # ─── Background Notification Worker ────────────────────────
@@ -2983,4 +2750,6 @@ if "worker_started" not in st.session_state:
     st.session_state.worker_started = True
     worker_thread = threading.Thread(target=reminder_worker, daemon=True)
     worker_thread.start()
+
+
 

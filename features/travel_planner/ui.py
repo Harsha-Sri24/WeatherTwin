@@ -12,6 +12,19 @@ from .service import (
     compute_flight_delay, fetch_airport_weather, parse_delay_risk,
 )
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_travel_report(**kwargs):
+    return get_travel_report(**kwargs)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_road_weather(lat, lon, start_date=None, end_date=None):
+    return fetch_road_weather(lat, lon, start_date=start_date, end_date=end_date)
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_fetch_airport_weather(icao_code):
+    return fetch_airport_weather(icao_code)
+
+
 def get_temp_unit():
     return st.session_state.get("temp_unit", "Celsius")
 
@@ -99,15 +112,25 @@ AIRPORT_LOOKUP = {
     "Tulsa (TUL)": "KTUL",
     # ── International Hubs ──
     "Amsterdam Schiphol (AMS)": "EHAM",
+    "Bengaluru / Bangalore (BLR)": "VOBL",
     "Cancún (CUN)": "MMUN",
+    "Chennai (MAA)": "VOMM",
+    "Delhi / New Delhi (DEL)": "VIDP",
     "Dubai (DXB)": "OMDB",
     "Frankfurt (FRA)": "EDDF",
+    "Hong Kong (HKG)": "VHHH",
+    "Hyderabad (HYD)": "VOHS",
+    "Kolkata (CCU)": "VECC",
     "London Heathrow (LHR)": "EGLL",
     "London Gatwick (LGW)": "EGKK",
     "Mexico City (MEX)": "MMMX",
+    "Mumbai (BOM)": "VABB",
     "Paris CDG (CDG)": "LFPG",
-    "Toronto Pearson (YYZ)": "CYYZ",
+    "Singapore Changi (SIN)": "WSSS",
+    "Sydney (SYD)": "YSSY",
     "Tokyo Narita (NRT)": "RJAA",
+    "Tokyo Haneda (HND)": "RJTT",
+    "Toronto Pearson (YYZ)": "CYYZ",
     "Vancouver (YVR)": "CYVR",
 }
 
@@ -161,8 +184,7 @@ def render_travel_planner_tab(city: str):
 
     st.markdown("""
 <div style="margin-bottom:10px;">
-    <div style="font-size:1.4rem; font-weight:800; background:linear-gradient(135deg,#3b82f6,#8b5cf6);
-            -webkit-background-clip:text; -webkit-text-fill-color:transparent;">✈️ Travel Weather Planner</div>
+    <div style="font-size:1.4rem; font-weight:800; background:linear-gradient(135deg,#3b82f6,#8b5cf6); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">✈️ Travel Weather Planner</div>
     <div style="font-size:0.72rem; color:#94a3b8; margin-top:2px;">Plan your trip with weather intelligence, personalized packing & itinerary</div>
 </div>
 """, unsafe_allow_html=True)
@@ -175,16 +197,17 @@ def render_travel_planner_tab(city: str):
     # ─── Inputs — Row 1: Cities ────────────────
     city_col1, city_col2 = st.columns(2)
     with city_col1:
-        departure_city = st.text_input(
+        from frontend.city_autocomplete import city_autocomplete
+        departure_city = city_autocomplete(
             "🏠 Departure City",
-            value=home_city,
+            default_value=home_city,
             placeholder="e.g. Kansas City, New York...",
             key="travel_departure_v4",
         )
     with city_col2:
-        destination = st.text_input(
+        destination = city_autocomplete(
             "🏙️ Destination",
-            value=city or "",
+            default_value=city or "",
             placeholder="e.g. Tokyo, Paris...",
             key="travel_dest_v4",
         )
@@ -228,7 +251,7 @@ def render_travel_planner_tab(city: str):
         mode_clean = "Car" if "Car" in travel_mode else "Flight"
 
         with st.spinner("🌍 Generating your personalized travel plan..."):
-            report = get_travel_report(
+            report = _cached_get_travel_report(
                 destination=destination,
                 month=start_date.strftime("%B"),
                 start_date=start_date.isoformat(),
@@ -256,15 +279,28 @@ def render_travel_planner_tab(city: str):
         cache_badge = '<span style="background:rgba(16,185,129,0.1);color:#10b981;padding:2px 8px;border-radius:12px;font-size:0.6rem;font-weight:700;margin-left:10px;border:1px solid rgba(16,185,129,0.2);">⚡ CACHED</span>' if is_cached_val else ""
         
         st.markdown(f"""
-<div style="background:linear-gradient(145deg,rgba(59,130,246,0.08),rgba(139,92,246,0.08));
-            border:1px solid rgba(59,130,246,0.2);border-radius:12px;padding:8px 14px;margin:6px 0;display:flex;align-items:center;">
-    <div style="flex-grow:1;">
-        <span style="font-size:1rem;font-weight:700;color:var(--text-primary);">{mode_emoji} {report.destination}</span>
-        {cache_badge}
-        <div style="font-size:0.7rem;color:#94a3b8;margin-top:2px;">
-            📅 {report.start_date} → {report.end_date} · {report.num_days}d · {report.travel_mode}
-            {f' · 🏠 {report.home_city}' if report.home_city else ''}
-        </div>
+<div style="background:linear-gradient(145deg,rgba(59,130,246,0.08),rgba(139,92,246,0.08)); border:1px solid rgba(59,130,246,0.2); border-radius:12px; padding:8px 14px; margin:6px 0; display:flex; align-items:center;">
+<div style="flex-grow:1;">
+<span style="font-size:1rem; font-weight:700; color:var(--text-primary);">{mode_emoji} {report.destination}</span>
+{cache_badge}
+<div style="font-size:0.7rem; color:#94a3b8; margin-top:2px;">
+📅 {report.start_date} → {report.end_date} · {report.num_days}d · {report.travel_mode}
+{f' · 🏠 {report.home_city}' if report.home_city else ''}
+</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+        # ─── Personalized Health Advisory ──────────
+        if report.health_advisory:
+            st.markdown(f"""
+<div style="background:rgba(217,119,6,0.08); border:1px solid rgba(217,119,6,0.2); border-radius:12px; padding:15px; margin-bottom:15px;">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <span style="font-size:1.2rem;">🩺</span>
+        <span style="font-weight:700; color:#d97706; font-size:0.95rem;">Personal Health Advisory</span>
+    </div>
+    <div style="font-size:0.9rem; line-height:1.6; color:var(--text-primary);">
+        {report.health_advisory}
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -319,7 +355,7 @@ def render_travel_planner_tab(city: str):
         def _render_road_conditions(lat: float, lon: float, location_name: str, start_date: str = None, end_date: str = None):
             date_label = f" from {start_date} to {end_date}" if start_date and end_date else ""
             with st.spinner(f"Fetching road weather data for {location_name}{date_label}..."):
-                road_data = fetch_road_weather(lat, lon, start_date=start_date, end_date=end_date)
+                road_data = _cached_fetch_road_weather(lat, lon, start_date=start_date, end_date=end_date)
                 road = compute_road_conditions(road_data)
 
             if road.worst_hour:
@@ -327,11 +363,10 @@ def render_travel_planner_tab(city: str):
 
                 # ── Overall advisory banner ──
                 st.markdown(f"""
-                <div style="background:var(--secondary-background-color);border:1px solid var(--secondary-background-color);
-                            border-radius:10px;padding:8px 14px;margin-bottom:8px;font-size:0.78rem;color:var(--text-color);">
-                    {road.overall_advisory}
-                </div>
-                """, unsafe_allow_html=True)
+<div style="background:var(--secondary-background-color); border:1px solid var(--secondary-background-color); border-radius:10px; padding:8px 14px; margin-bottom:8px; font-size:0.78rem; color:var(--text-color);">
+    {road.overall_advisory}
+</div>
+""", unsafe_allow_html=True)
 
                 st.caption(f"Showing peak danger conditions at **{display_hr.time_label}**:")
 
@@ -369,11 +404,10 @@ def render_travel_planner_tab(city: str):
                 if display_hr.ice.risk_factors:
                     factors_html = " · ".join(display_hr.ice.risk_factors)
                     st.markdown(f"""
-                    <div style="font-size:0.7rem;color:#d97706;background:rgba(217,119,6,0.1);
-                                border-radius:6px;padding:6px 10px;margin-bottom:6px;">
-                        ⚠️ {factors_html}
-                    </div>
-                    """, unsafe_allow_html=True)
+<div style="font-size:0.7rem; color:#d97706; background:rgba(217,119,6,0.1); border-radius:6px; padding:6px 10px; margin-bottom:6px;">
+    ⚠️ {factors_html}
+</div>
+""", unsafe_allow_html=True)
 
                 # Driving tip
                 st.caption(f"💡 {display_hr.fog.speed_advice} · Stopping distance: {display_hr.ice.stopping_distance_multiplier}x normal")
@@ -434,8 +468,9 @@ def render_travel_planner_tab(city: str):
                 matches.append((candidate, _ICAO_TO_NAME[candidate]))
                 
         lower = text.lower()
+        base_city = lower.split(',')[0].strip()
         for name, icao in AIRPORT_LOOKUP.items():
-            if lower in name.lower() and icao not in [m[0] for m in matches]:
+            if (lower in name.lower() or base_city in name.lower()) and icao not in [m[0] for m in matches]:
                 matches.append((icao, name))
                 
         if not matches and len(upper) >= 4 and upper.isalpha():
@@ -473,7 +508,7 @@ def render_travel_planner_tab(city: str):
                             st.caption("No matching airports found.")
                         for icao, label in dep_airports:
                             with st.container(border=True):
-                                wx = fetch_airport_weather(icao)
+                                wx = _cached_fetch_airport_weather(icao)
                                 risk = parse_delay_risk(wx)
                                 st.metric(f"🛫 {label} ({icao})", risk.risk_level, f"Score: {risk.delay_risk_score}/100")
                                 if risk.visibility_sm is not None:
@@ -490,7 +525,7 @@ def render_travel_planner_tab(city: str):
                             st.caption("No matching airports found.")
                         for icao, label in dest_airports:
                             with st.container(border=True):
-                                wx = fetch_airport_weather(icao)
+                                wx = _cached_fetch_airport_weather(icao)
                                 risk = parse_delay_risk(wx)
                                 st.metric(f"🛬 {label} ({icao})", risk.risk_level, f"Score: {risk.delay_risk_score}/100")
                                 if risk.visibility_sm is not None:

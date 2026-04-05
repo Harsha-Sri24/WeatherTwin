@@ -17,6 +17,11 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_smart_recommendations(city, weather_data, user_profile, unit_p):
+    return run_async(get_smart_recommendations(city, weather_data, user_profile, unit_p))
+
+
 def render_smart_recommender_tab(city: str):
     """Render the Structured Smart Daily Prediction tab."""
     
@@ -109,7 +114,7 @@ def render_smart_recommender_tab(city: str):
     with st.spinner("AI is analyzing your day..."):
         try:
             unit_p = st.session_state.get("temp_unit", "Celsius")
-            recs = run_async(get_smart_recommendations(city, weather_data, user_profile, unit_p))
+            recs = _cached_get_smart_recommendations(city, weather_data, user_profile, unit_p)
         except Exception as e:
             st.error(f"Prediction failed in UI: {e}")
             return

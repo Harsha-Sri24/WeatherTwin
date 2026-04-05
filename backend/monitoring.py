@@ -216,10 +216,15 @@ def init_monitoring_tables():
 
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn and not conn.closed:
+            try:
+                conn.rollback()
+            except psycopg2.InterfaceError:
+                pass
         print(f"[Monitoring] Table init error: {e}")
     finally:
-        conn.close()
+        if conn and not conn.closed:
+            conn.close()
 
 
 def flush_to_database():
@@ -279,9 +284,14 @@ def flush_to_database():
             )
 
         conn.commit()
-        conn.close()
     except Exception as e:
+        if 'conn' in locals() and conn and not conn.closed:
+            try: conn.rollback()
+            except: pass
         print(f"[Monitoring] Flush error: {e}")
+    finally:
+        if 'conn' in locals() and conn and not conn.closed:
+            conn.close()
 
 
 # ──────────────────────────────────────────────
@@ -774,9 +784,6 @@ def start_flush_thread(interval_seconds: int = 30):
     _flush_thread_started = True
 
 
-# Auto-start on import
-try:
-    init_monitoring_tables()
-    start_flush_thread(30)
-except Exception as e:
-    print(f"[Monitoring] Init warning: {e}")
+# NOTE: Initialization and flush thread should be started explicitly 
+# by the application (e.g., in streamlit_app.py) to avoid redundant 
+# execution and connection issues in Streamlit's rerun model.

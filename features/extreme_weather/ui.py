@@ -6,13 +6,18 @@ import streamlit as st
 from .service import get_extreme_weather_alerts
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_get_extreme_weather_alerts(city):
+    return get_extreme_weather_alerts(city)
+
+
 def render_extreme_weather_tab(city: str):
     """Render the Extreme Weather tab content."""
     st.subheader("🌪️ Extreme Weather Event Tracker")
     st.caption(f"Monitoring alerts for **{city}**")
 
     with st.spinner("Checking for extreme weather alerts..."):
-        report = get_extreme_weather_alerts(city)
+        report = _cached_get_extreme_weather_alerts(city)
 
     # Overall risk badge
     risk_colors = {"Low": "delta-good", "Moderate": "delta-warn", "High": "delta-bad", "Extreme": "delta-bad"}

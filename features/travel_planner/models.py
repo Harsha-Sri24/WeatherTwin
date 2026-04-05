@@ -19,6 +19,7 @@ class TravelReport(BaseModel):
     travel_mode: str = Field(default="Flight", description="Flight or Car")
     profile: str = Field(default="", description="Destination weather profile")
     packing_list: str = Field(default="", description="Health-aware packing recommendations")
+    health_advisory: str = Field(default="", description="Personalized health-weather advisor for trip")
     weather_twin: str = Field(default="", description="Most similar weather city")
     flight_risk: str = Field(default="Low", description="Travel risk assessment")
     itinerary: str = Field(default="", description="Day-by-day itinerary")

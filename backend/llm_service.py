@@ -30,30 +30,21 @@ client = AsyncOpenAI(
 
 MODEL = "llama-3.3-70b-versatile"
 
-SYSTEM_PROMPT = """You are WeatherTwin, a GenAI-powered climate intelligence assistant. Your role is to provide personalized, context-aware weather insights that go beyond basic forecasts.
+SYSTEM_PROMPT = """You are WeatherTwin, a GenAI-powered climate intelligence assistant. Your role is to provide personalized, context-aware weather insights and answer general climate-related questions.
 
 ## Core Principles
-1. **Contextual Analysis**: Always compare current conditions to historical norms. Tell users if conditions are typical, unusual, or extreme.
-2. **Evidence-Based**: Ground every claim in the weather data provided. Cite specific numbers and sources.
-3. **Uncertainty Transparency**: When data is limited or trends are unclear, say so explicitly. Use phrases like "Based on {N} years of data..." or "With moderate confidence..."
-4. **Actionable Insights**: Don't just describe weather — help users make decisions. Frame insights around actions (travel, outdoor activities, planning, risk).
-5. **Climate Awareness**: Highlight long-term trends when relevant (warming/cooling patterns, changing precipitation).
+1. **Contextual Analysis**: Prioritize the provided weather data context. If you have specific data, ground your response in it.
+2. **Flexible Geography**: Users may ask about cities other than the one provided in the RAG context. If a user asks about a specific city and you DON'T have data for it, try to answer using your general knowledge, but be transparent that you don't have the real-time feed for that location.
+3. **Evidence-Based**: Ground specific weather claims in the context data provided. Cite numbers when possible.
+4. **Actionable Insights**: Help users make decisions (travel, outdoor activities, safety).
+5. **Climate Awareness**: Highlight trends if relevant.
 
 ## Response Style
-- Use clear, conversational language — not technical jargon
-- Structure responses with sections when answering complex questions
-- Include specific numbers (temperatures, percentages, z-scores) to support claims
-- Use comparative language: "X°C warmer than usual", "in the top 10% historically"
-- Add emoji sparingly for visual scanning (🌡️ 🌧️ ☀️ ❄️ 💨 ⚠️)
-- Keep responses concise but complete — aim for 150-300 words for typical queries
-
-## Data Sources
-You will receive structured weather context including:
-- Current conditions (temperature, humidity, wind, etc.)
-- Forecast data (hourly and daily)
-- Historical climate statistics (means, extremes, trends, anomaly assessments)
-- Comparison analysis (z-scores, percentiles, severity ratings)
-- Actionable Insights: Don't just describe weather — help users make decisions. Frame insights around actions (travel, outdoor activities, planning, risk). Always reference these data sources in your analysis. If data is missing, acknowledge it."""
+- Structure responses clearly.
+- Include specific numbers from the data if available.
+- If the user asks about a city that differs from the context data, DON'T just refuse to answer. Say "I have the real-time data for [Context City], but based on general patterns for [User's City]..." or similar.
+- Use emoji sparingly (🌡️ 🌧️ 💨).
+- Keep responses concise but complete."""
 
 
 def build_rag_context(city_info: dict, current: dict = None, forecast: dict = None,
@@ -212,6 +203,43 @@ async def chat_with_context(user_message: str, rag_context: str,
         }
 
 
+async def chat_with_context_stream(user_message: str, rag_context: str,
+                                   chat_history: list = None):
+    """
+    Asynchronous generator that streams the LLM response.
+    Yields chunks of text as they arrive from Groq.
+    """
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.append({
+        "role": "system",
+        "content": f"## Weather Data Context\nThe following is real-time and historical weather data retrieved for the user's query. Use this data to ground your response.\n\n{rag_context}"
+    })
+
+    if chat_history:
+        for msg in chat_history[-10:]:
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        stream = await client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024,
+            top_p=0.9,
+            stream=True
+        )
+
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    except Exception as e:
+        logger.error(f"Streaming chat request failed: {e}", exc_info=True)
+        yield f"Error during streaming: {str(e)}"
+
+
 async def generate_proactive_insight(city_info: dict, current: dict,
                                      historical: dict, comparison: dict,
                                      profile: dict = None) -> str:
@@ -241,7 +269,9 @@ async def generate_proactive_insight(city_info: dict, current: dict,
         "Do NOT mention historical averages, z-scores, percentiles, or comparisons to past data. "
         f"{'Focus on: what to wear, sunscreen needs, and daytime activities.' if is_day else 'Focus on: what to wear for the night, safety tips for low visibility, and nighttime activities.'} "
         "Be specific about the weather — mention temperature, wind, rain chances. "
-        "Use a friendly, helpful tone. Do not use markdown formatting."
+        "Use a friendly, helpful tone. Do NOT use markdown. "
+        "IMPORTANT: If the USER PROFILE below contains health issues, your primary goal is to provide specific advice for those conditions. "
+        "Do NOT prefix your sentences with labels like 'TEMP:', 'ALERT:', or 'WEAR:'. Write in natural, flowing sentences."
         f"{profile_text}\n\n" + context
     )
 
@@ -253,7 +283,7 @@ async def generate_proactive_insight(city_info: dict, current: dict,
                 {"role": "user", "content": prompt},
             ],
             temperature=0.6,
-            max_tokens=150,
+            max_tokens=300,
         )
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000

@@ -475,7 +475,7 @@ def remove_favorite(user_id: int, lat: float, lon: float) -> dict:
         cur.execute(
             """
             DELETE FROM weathertwin_favorites 
-            WHERE user_id = %s AND abs(lat - %s) < 0.001 AND abs(lon - %s) < 0.001
+            WHERE user_id = %s AND abs(lat - %s) < 0.05 AND abs(lon - %s) < 0.05
             """,
             (user_id, lat, lon),
         )
@@ -718,10 +718,13 @@ def add_chat_message(session_id: int, role: str, content: str) -> dict:
         conn.commit()
         return {"success": True}
     except Exception as e:
-        conn.rollback()
+        if conn and not conn.closed:
+            try: conn.rollback()
+            except: pass
         return {"success": False, "error": str(e)}
     finally:
-        conn.close()
+        if conn and not conn.closed:
+            conn.close()
 
 
 def delete_chat_session(session_id: int) -> dict:
