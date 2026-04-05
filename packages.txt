@@ -1,1 +1,5 @@
 libpq-dev
+libjpeg-dev
+zlib1g-dev
+tcl-dev
+tk-dev
