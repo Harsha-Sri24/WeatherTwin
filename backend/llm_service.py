@@ -5,10 +5,22 @@ RAG-powered climate intelligence analysis using Groq (Llama 3.3 70B).
 
 import os
 import json
+import time
+import traceback
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Import monitoring and logging
+try:
+    from monitoring import record_llm_call, record_error
+    from logger_config import llm_logger as logger
+except ImportError:
+    import logging
+    logger = logging.getLogger("llm_service")
+    def record_llm_call(*args, **kwargs): pass
+    def record_error(*args, **kwargs): pass
 
 # Groq client (OpenAI-compatible)
 client = AsyncOpenAI(
@@ -18,30 +30,21 @@ client = AsyncOpenAI(
 
 MODEL = "llama-3.3-70b-versatile"
 
-SYSTEM_PROMPT = """You are WeatherTwin, a GenAI-powered climate intelligence assistant. Your role is to provide personalized, context-aware weather insights that go beyond basic forecasts.
+SYSTEM_PROMPT = """You are WeatherTwin, a GenAI-powered climate intelligence assistant. Your role is to provide personalized, context-aware weather insights and answer general climate-related questions.
 
 ## Core Principles
-1. **Contextual Analysis**: Always compare current conditions to historical norms. Tell users if conditions are typical, unusual, or extreme.
-2. **Evidence-Based**: Ground every claim in the weather data provided. Cite specific numbers and sources.
-3. **Uncertainty Transparency**: When data is limited or trends are unclear, say so explicitly. Use phrases like "Based on {N} years of data..." or "With moderate confidence..."
-4. **Actionable Insights**: Don't just describe weather — help users make decisions. Frame insights around actions (travel, outdoor activities, planning, risk).
-5. **Climate Awareness**: Highlight long-term trends when relevant (warming/cooling patterns, changing precipitation).
+1. **Contextual Analysis**: Prioritize the provided weather data context. If you have specific data, ground your response in it.
+2. **Flexible Geography**: Users may ask about cities other than the one provided in the RAG context. If a user asks about a specific city and you DON'T have data for it, try to answer using your general knowledge, but be transparent that you don't have the real-time feed for that location.
+3. **Evidence-Based**: Ground specific weather claims in the context data provided. Cite numbers when possible.
+4. **Actionable Insights**: Help users make decisions (travel, outdoor activities, safety).
+5. **Climate Awareness**: Highlight trends if relevant.
 
 ## Response Style
-- Use clear, conversational language — not technical jargon
-- Structure responses with sections when answering complex questions
-- Include specific numbers (temperatures, percentages, z-scores) to support claims
-- Use comparative language: "X°C warmer than usual", "in the top 10% historically"
-- Add emoji sparingly for visual scanning (🌡️ 🌧️ ☀️ ❄️ 💨 ⚠️)
-- Keep responses concise but complete — aim for 150-300 words for typical queries
-
-## Data Sources
-You will receive structured weather context including:
-- Current conditions (temperature, humidity, wind, etc.)
-- Forecast data (hourly and daily)
-- Historical climate statistics (means, extremes, trends, anomaly assessments)
-- Comparison analysis (z-scores, percentiles, severity ratings)
-- Actionable Insights: Don't just describe weather — help users make decisions. Frame insights around actions (travel, outdoor activities, planning, risk). Always reference these data sources in your analysis. If data is missing, acknowledge it."""
+- Structure responses clearly.
+- Include specific numbers from the data if available.
+- If the user asks about a city that differs from the context data, DON'T just refuse to answer. Say "I have the real-time data for [Context City], but based on general patterns for [User's City]..." or similar.
+- Use emoji sparingly (🌡️ 🌧️ 💨).
+- Keep responses concise but complete."""
 
 
 def build_rag_context(city_info: dict, current: dict = None, forecast: dict = None,
@@ -112,24 +115,20 @@ def build_rag_context(city_info: dict, current: dict = None, forecast: dict = No
 
 async def chat_with_context(user_message: str, rag_context: str,
                             chat_history: list = None) -> dict:
-    """
-    Send a user question to the LLM along with RAG weather context.
-    Returns the assistant's response with metadata.
-    """
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    """Send a user question to the LLM along with RAG weather context."""
+    logger.info(f"Chat request: '{user_message[:80]}...'", extra={"service": "Groq"})
+    start_time = time.perf_counter()
 
-    # Add RAG context as a system-level data injection
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.append({
         "role": "system",
         "content": f"## Weather Data Context\nThe following is real-time and historical weather data retrieved for the user's query. Use this data to ground your response.\n\n{rag_context}"
     })
 
-    # Add chat history (last 10 messages)
     if chat_history:
         for msg in chat_history[-10:]:
             messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
-    # Add current user message
     messages.append({"role": "user", "content": user_message})
 
     try:
@@ -141,38 +140,114 @@ async def chat_with_context(user_message: str, rag_context: str,
             top_p=0.9,
         )
 
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
         answer = response.choices[0].message.content
         usage = response.usage
+
+        prompt_tokens = usage.prompt_tokens if usage else 0
+        completion_tokens = usage.completion_tokens if usage else 0
+        total_tokens = usage.total_tokens if usage else 0
+
+        # Record metrics
+        record_llm_call(
+            model=MODEL,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            latency_ms=elapsed_ms,
+            success=True,
+            call_type="chat",
+        )
+
+        logger.info(
+            f"Chat response generated in {elapsed_ms:.0f}ms ({total_tokens} tokens)",
+            extra={"service": "Groq", "latency_ms": elapsed_ms, "tokens": total_tokens}
+        )
 
         return {
             "status": "success",
             "answer": answer,
             "model": MODEL,
             "usage": {
-                "prompt_tokens": usage.prompt_tokens if usage else 0,
-                "completion_tokens": usage.completion_tokens if usage else 0,
-                "total_tokens": usage.total_tokens if usage else 0,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             },
+            "latency_ms": round(elapsed_ms, 1),
             "sources": [
-                "Open-Meteo Current Weather API",
+                "OpenWeatherMap API",
                 "Open-Meteo Historical Weather API",
                 "Open-Meteo Forecast API",
             ],
         }
     except Exception as e:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        error_msg = str(e)
+
+        record_llm_call(
+            model=MODEL, prompt_tokens=0, completion_tokens=0, total_tokens=0,
+            latency_ms=elapsed_ms, success=False, call_type="chat", error=error_msg,
+        )
+        record_error("Groq", type(e).__name__, error_msg, traceback.format_exc())
+
+        logger.error(f"Chat request failed: {e}",
+                     extra={"service": "Groq", "latency_ms": elapsed_ms}, exc_info=True)
+
         return {
             "status": "error",
-            "answer": f"I'm sorry, I couldn't process your question right now. Error: {str(e)}",
+            "answer": f"I'm sorry, I couldn't process your question right now. Error: {error_msg}",
             "model": MODEL,
             "usage": {},
+            "latency_ms": round(elapsed_ms, 1),
             "sources": [],
         }
+
+
+async def chat_with_context_stream(user_message: str, rag_context: str,
+                                   chat_history: list = None):
+    """
+    Asynchronous generator that streams the LLM response.
+    Yields chunks of text as they arrive from Groq.
+    """
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.append({
+        "role": "system",
+        "content": f"## Weather Data Context\nThe following is real-time and historical weather data retrieved for the user's query. Use this data to ground your response.\n\n{rag_context}"
+    })
+
+    if chat_history:
+        for msg in chat_history[-10:]:
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        stream = await client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024,
+            top_p=0.9,
+            stream=True
+        )
+
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    except Exception as e:
+        logger.error(f"Streaming chat request failed: {e}", exc_info=True)
+        yield f"Error during streaming: {str(e)}"
 
 
 async def generate_proactive_insight(city_info: dict, current: dict,
                                      historical: dict, comparison: dict,
                                      profile: dict = None) -> str:
-    """Generate a brief proactive insight about current conditions, tailored to user profile."""
+    """Generate a brief proactive insight about current conditions."""
+    logger.info(f"Generating proactive insight for {city_info.get('name', 'Unknown')}",
+                extra={"service": "Groq", "city": city_info.get("name")})
+    start_time = time.perf_counter()
+
     context = build_rag_context(city_info, current=current)
 
     is_day = current.get("is_day", True)
@@ -185,7 +260,7 @@ async def generate_proactive_insight(city_info: dict, current: dict,
             f"- Residence: {profile.get('residence_type', 'Unknown')}\n"
             f"- Commute: {profile.get('commute_type', 'Unknown')}\n"
             f"- Health Factors: {profile.get('health_issues', 'None')}\n"
-            "Tailor your practical advice heavily to these profile factors. For example, if they use public transit, warn of wait times in cold/rain; if they live in an individual house, mention property prep for storms/snow; if they have asthma/allergies or other health factors, emphasize how the current weather might affect them."
+            "Tailor your practical advice heavily to these profile factors."
         )
 
     prompt = (
@@ -194,7 +269,9 @@ async def generate_proactive_insight(city_info: dict, current: dict,
         "Do NOT mention historical averages, z-scores, percentiles, or comparisons to past data. "
         f"{'Focus on: what to wear, sunscreen needs, and daytime activities.' if is_day else 'Focus on: what to wear for the night, safety tips for low visibility, and nighttime activities.'} "
         "Be specific about the weather — mention temperature, wind, rain chances. "
-        "Use a friendly, helpful tone. Do not use markdown formatting."
+        "Use a friendly, helpful tone. Do NOT use markdown. "
+        "IMPORTANT: If the USER PROFILE below contains health issues, your primary goal is to provide specific advice for those conditions. "
+        "Do NOT prefix your sentences with labels like 'TEMP:', 'ALERT:', or 'WEAR:'. Write in natural, flowing sentences."
         f"{profile_text}\n\n" + context
     )
 
@@ -206,20 +283,45 @@ async def generate_proactive_insight(city_info: dict, current: dict,
                 {"role": "user", "content": prompt},
             ],
             temperature=0.6,
-            max_tokens=150,
+            max_tokens=300,
         )
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        usage = response.usage
+        prompt_tokens = usage.prompt_tokens if usage else 0
+        completion_tokens = usage.completion_tokens if usage else 0
+        total_tokens = usage.total_tokens if usage else 0
+
+        record_llm_call(
+            model=MODEL,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            latency_ms=elapsed_ms,
+            success=True,
+            call_type="insight",
+        )
+
+        logger.info(f"Insight generated in {elapsed_ms:.0f}ms",
+                    extra={"service": "Groq", "latency_ms": elapsed_ms, "tokens": total_tokens})
+
         return response.choices[0].message.content.strip()
-    except Exception:
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        record_llm_call(
+            model=MODEL, prompt_tokens=0, completion_tokens=0, total_tokens=0,
+            latency_ms=elapsed_ms, success=False, call_type="insight", error=str(e),
+        )
+        record_error("Groq", type(e).__name__, str(e), traceback.format_exc())
+        logger.error(f"Insight generation failed: {e}", extra={"service": "Groq"}, exc_info=True)
         return ""
 
 
 async def generate_reminder_advisory(description: str, weather_data: dict, city_name: str, event_time_str: str = "") -> str:
-    """Generate a specific advisory (Proceed vs Postpone) for a reminder based on weather.
+    """Generate a specific advisory (Proceed vs Postpone) for a reminder based on weather."""
+    logger.info(f"Generating reminder advisory for '{description}' in {city_name}", extra={"service": "Groq"})
+    start_time = time.perf_counter()
 
-    *weather_data* may contain either current observations or forecast data
-    for the event time (preferred).  When forecast data is available the
-    advisory will be specifically about conditions at the event time.
-    """
     context = ""
     if weather_data:
         source_label = "Forecast" if weather_data.get("source") == "forecast" else "Current"
@@ -274,6 +376,30 @@ async def generate_reminder_advisory(description: str, weather_data: dict, city_
             temperature=0.6,
             max_tokens=200,
         )
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        usage = response.usage
+
+        record_llm_call(
+            model=MODEL,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            latency_ms=elapsed_ms,
+            success=True,
+            call_type="reminder_advisory",
+        )
+
+        logger.info(f"Reminder advisory generated in {elapsed_ms:.0f}ms",
+                    extra={"service": "Groq", "latency_ms": elapsed_ms})
+
         return response.choices[0].message.content.strip()
-    except Exception:
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        record_llm_call(
+            model=MODEL, prompt_tokens=0, completion_tokens=0, total_tokens=0,
+            latency_ms=elapsed_ms, success=False, call_type="reminder_advisory", error=str(e),
+        )
+        record_error("Groq", type(e).__name__, str(e), traceback.format_exc())
+        logger.error(f"Reminder advisory failed: {e}", extra={"service": "Groq"}, exc_info=True)
         return "WeatherTwin is currently unable to generate a specific advisory, but please check the latest conditions before proceeding."

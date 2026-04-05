@@ -6,6 +6,11 @@ import streamlit as st
 from .service import simulate_climate_scenario, SCENARIOS
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_simulate_climate_scenario(city, scenario, year):
+    return simulate_climate_scenario(city, scenario, year)
+
+
 def render_climate_simulator_tab(city: str):
     """Render the Climate Change Scenario Simulator tab."""
     st.subheader("🧬 Climate Change Scenario Simulator")
@@ -13,7 +18,8 @@ def render_climate_simulator_tab(city: str):
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        sim_city = st.text_input("City", value=city, key="sim_city")
+        from frontend.city_autocomplete import city_autocomplete
+        sim_city = city_autocomplete("City", default_value=city, placeholder="Search city...", key="sim_city")
     with col2:
         scenario = st.selectbox(
             "IPCC Scenario",
@@ -27,7 +33,7 @@ def render_climate_simulator_tab(city: str):
 
     if st.button("🔬 Run Simulation", key="sim_btn", use_container_width=True):
         with st.spinner(f"Simulating {sim_city} under {scenario} for {year}..."):
-            projection = simulate_climate_scenario(sim_city, scenario, year)
+            projection = _cached_simulate_climate_scenario(sim_city, scenario, year)
 
         # Side-by-side: today vs future
         col_today, col_future = st.columns(2)

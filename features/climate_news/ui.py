@@ -6,6 +6,15 @@ import streamlit as st
 from .service import get_daily_digest, analyze_claim
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_daily_digest():
+    return get_daily_digest()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_analyze_claim(claim_input):
+    return analyze_claim(claim_input)
+
+
 def render_climate_news_tab():
     """Render the Climate News Analyst tab."""
     st.subheader("📰 Climate News Analyst")
@@ -16,7 +25,7 @@ def render_climate_news_tab():
     with news_tab:
         if st.button("🔄 Generate Today's Digest", key="news_digest_btn", use_container_width=True):
             with st.spinner("Compiling climate news..."):
-                digest = get_daily_digest()
+                digest = _cached_get_daily_digest()
 
             if not digest.articles:
                 st.info("No climate news articles available at the moment.")
@@ -46,7 +55,7 @@ def render_climate_news_tab():
                 st.warning("Please enter a claim to verify.")
             else:
                 with st.spinner("Fact-checking..."):
-                    verification = analyze_claim(claim_input)
+                    verification = _cached_analyze_claim(claim_input)
 
                 verdict_colors = {"Verified": "delta-good", "Partially Verified": "delta-warn", "Unverified": "delta-warn", "False": "delta-bad"}
                 verdict_icons = {"Verified": "✅", "Partially Verified": "⚠️", "Unverified": "❓", "False": "❌"}

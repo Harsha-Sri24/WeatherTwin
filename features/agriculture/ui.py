@@ -14,35 +14,48 @@ from .service import (
 )
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_fetch_weather(city):
+    return fetch_weather(city)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_get_agriculture_report(city, weather_data, crop):
+    return get_agriculture_report(city, weather_data, crop)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_fetch_agriculture_data(lat, lon):
+    return fetch_agriculture_data(lat, lon)
+
+
 def render_agriculture_tab(city: str):
     """Render the Agricultural Weather Intelligence tab."""
-    st.subheader("🌾 Agricultural Weather Intelligence")
+    st.subheader("🌾 Smart Farming Assistant")
     st.caption(f"Farming & planting insights for **{city}**")
 
     crop = st.text_input("Crop type (optional)", placeholder="e.g., tomato, corn, wheat", key="ag_crop")
 
     with st.spinner("Computing agricultural indices..."):
-        weather_data = fetch_weather(city)
+        weather_data = _cached_fetch_weather(city)
         if "error" in weather_data:
             st.error(f"Could not fetch weather data: {weather_data['error']}")
             return
-        report = get_agriculture_report(city, weather_data, crop)
+        report = _cached_get_agriculture_report(city, weather_data, crop)
 
     # Metric cards
     c1, c2, c3 = st.columns(3)
     with c1:
         with st.container(border=True):
-            st.metric("🌡️ Growing Degree Days", f"{report.gdd}")
-            st.caption("Accumulated heat units")
+            st.metric("🌡️ Plant Growth Tracker", f"{report.gdd}", help="Heat units received to fuel plant growth")
+            st.caption("Growth heat index")
     with c2:
         with st.container(border=True):
-            st.metric("❄️ Frost Risk", f"{report.frost_risk_pct}%")
+            st.metric("❄️ Frost Warning", f"{report.frost_risk_pct}%", help="Chance of freezing temperatures")
             cls = "delta-good" if report.frost_risk_pct < 20 else ("delta-warn" if report.frost_risk_pct < 60 else "delta-bad")
             lbl = "Low" if report.frost_risk_pct < 20 else ("Moderate" if report.frost_risk_pct < 60 else "High")
             st.markdown(f'<span class="delta-chip {cls}">{lbl}</span>', unsafe_allow_html=True)
     with c3:
         with st.container(border=True):
-            st.metric("💧 Soil Moisture", report.soil_moisture_est)
+            st.metric("💧 Soil Wetness", report.soil_moisture_est)
             moisture_cls = {"Dry": "delta-bad", "Normal": "delta-good", "Moist": "delta-warn", "Wet": "delta-warn"}
             st.markdown(f'<span class="delta-chip {moisture_cls.get(report.soil_moisture_est, "delta-warn")}">{report.soil_moisture_est}</span>', unsafe_allow_html=True)
 
@@ -69,7 +82,7 @@ def render_agriculture_tab(city: str):
         return
 
     with st.spinner("Loading advanced agriculture data from Open-Meteo..."):
-        ag_data = fetch_agriculture_data(lat, lon)
+        ag_data = _cached_fetch_agriculture_data(lat, lon)
 
     if "error" in ag_data:
         st.warning(f"Could not fetch agriculture data: {ag_data['error']}")
@@ -77,7 +90,7 @@ def render_agriculture_tab(city: str):
 
     # ── 1. Irrigation Scheduler ───────────────────────
     st.divider()
-    st.subheader("💧 Irrigation Scheduler")
+    st.subheader("💧 Watering Guide")
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -109,7 +122,7 @@ def render_agriculture_tab(city: str):
 
     # ── 2. Livestock Heat Stress Monitor ──────────────
     st.divider()
-    st.subheader("🐄 Livestock Heat Stress Monitor")
+    st.subheader("🐄 Animal Heat Safety")
 
     species = st.selectbox("Livestock Type",
         list(SPECIES_THRESHOLDS.keys()),
@@ -141,7 +154,7 @@ def render_agriculture_tab(city: str):
 
     # ── 3. Crop Disease Calendar ──────────────────────
     st.divider()
-    st.subheader("🦠 Crop Disease Calendar")
+    st.subheader("🦠 Plant Health Alerts")
 
     user_crops = st.multiselect("Your crops",
         ["corn", "wheat", "soybeans", "tomatoes", "potatoes", "grapes", "vegetables"],
@@ -165,7 +178,7 @@ def render_agriculture_tab(city: str):
 
     # ── 4. Field Work Windows ─────────────────────────
     st.divider()
-    st.subheader("🚜 Field Work Windows")
+    st.subheader("🚜 Best Days for Tractor Work")
 
     fw_col1, fw_col2 = st.columns(2)
     with fw_col1:
@@ -193,7 +206,7 @@ def render_agriculture_tab(city: str):
 
     # ── 5. Harvest Quality Predictor ──────────────────
     st.divider()
-    st.subheader("🌾 Harvest Quality Predictor")
+    st.subheader("🌾 Ideal Harvest Day")
 
     h_crop = st.selectbox("Crop to Harvest", list(HARVEST_QUALITY_RULES.keys()), key="harvest_crop")
 
