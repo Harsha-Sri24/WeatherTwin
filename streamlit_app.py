@@ -12,46 +12,48 @@ st.set_page_config(
 import sys
 import os
 import asyncio
+import traceback
 
-# Add backend to path so we can import services directly
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
-
-
-import folium
-from streamlit_folium import st_folium
-import plotly.graph_objects as go
-from streamlit_js_eval import get_geolocation
-
-import datetime
-import uuid
-import base64
-import threading
-import time
-
-# Import backend services
-import weather_service as ws
-import llm_service as llm
-import db_service as db
-import email_service as em
-
-# Import monitoring
+# ─── ERROR RECOVERY BLOCK ────────────────────────
 try:
-    import monitoring as mon
-    from logger_config import app_logger
-    MONITORING_ENABLED = True
-except ImportError:
-    MONITORING_ENABLED = False
-    import logging
-    app_logger = logging.getLogger("app")
+    # Add backend to path so we can import services directly
+    backend_path = os.path.join(os.path.dirname(__file__), "backend")
+    if backend_path not in sys.path:
+        sys.path.insert(0, backend_path)
 
-import extra_streamlit_components as stx
+    import folium
+    from streamlit_folium import st_folium
+    import plotly.graph_objects as go
+    from streamlit_js_eval import get_geolocation
+    import datetime
+    import uuid
+    import base64
+    import threading
+    import time
+    
+    # Import backend services
+    import weather_service as ws
+    import llm_service as llm
+    import db_service as db
+    import email_service as em
+    
+    # Import monitoring
+    try:
+        import monitoring as mon
+        from logger_config import app_logger
+        MONITORING_ENABLED = True
+    except ImportError:
+        MONITORING_ENABLED = False
+        import logging
+        app_logger = logging.getLogger("app")
 
+    import extra_streamlit_components as stx
+    cookie_manager = stx.CookieManager(key="wt_cookies")
 
-# Initialize cookie manager (must NOT be cached per Streamlit rules)
-def get_cookie_manager():
-    return stx.CookieManager(key="wt_cookies")
-
-cookie_manager = get_cookie_manager()
+except Exception as e:
+    st.error("🚀 **WeatherTwin Startup Critical Error**")
+    st.code(traceback.format_exc())
+    st.stop()
 
 # ─── Global Session State Init ──────────────────
 # Force-initialize all keys to avoid KeyError/AttributeError at the top level
