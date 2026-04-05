@@ -46,6 +46,14 @@ except ImportError:
 
 import extra_streamlit_components as stx
 
+# ─── Page Config (Must be first ST command) ──────
+st.set_page_config(
+    page_title="WeatherTwin — AI Climate Intelligence",
+    page_icon="🌤️",
+    layout="wide",
+    initial_sidebar_state="auto",
+)
+
 # Initialize cookie manager (must NOT be cached per Streamlit rules)
 cookie_manager = stx.CookieManager(key="wt_cookies")
 
@@ -265,13 +273,6 @@ if "reminder_thread_started" not in st.session_state:
     t.start()
     st.session_state.reminder_thread_started = True
 
-# ─── Page Config ─────────────────────────────────
-st.set_page_config(
-    page_title="WeatherTwin — AI Climate Intelligence",
-    page_icon="🌤️",
-    layout="wide",
-    initial_sidebar_state="auto",
-)
 
 # ─── Custom Dark CSS ─────────────────────────────
 DARK_CSS = """
