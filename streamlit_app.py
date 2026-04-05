@@ -2,7 +2,13 @@
 WeatherTwin — Streamlit App
 GenAI-powered climate intelligence dashboard with interactive map.
 """
+import streamlit as st
 
+# ✅ MUST BE FIRST STREAMLIT COMMAND
+st.set_page_config(
+    page_title="WeatherTwin",
+    layout="wide"
+)
 import sys
 import os
 import asyncio
@@ -10,7 +16,7 @@ import asyncio
 # Add backend to path so we can import services directly
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
-import streamlit as st
+
 import folium
 from streamlit_folium import st_folium
 import plotly.graph_objects as go
