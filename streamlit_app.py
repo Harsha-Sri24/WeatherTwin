@@ -48,7 +48,10 @@ import extra_streamlit_components as stx
 
 
 # Initialize cookie manager (must NOT be cached per Streamlit rules)
-cookie_manager = stx.CookieManager(key="wt_cookies")
+def get_cookie_manager():
+    return stx.CookieManager(key="wt_cookies")
+
+cookie_manager = get_cookie_manager()
 
 # ─── Global Session State Init ──────────────────
 # Force-initialize all keys to avoid KeyError/AttributeError at the top level
@@ -1398,6 +1401,46 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Global Controls ──
+    from frontend.city_autocomplete import city_autocomplete
+    default_search = st.session_state.get("last_search_term") or st.session_state.get("current_city") or ""
+    s_city = city_autocomplete("Search City", default_value=default_search, placeholder="Search city...", key="sidebar_city_search")
+    if s_city and s_city != st.session_state.get("last_search_term"):
+        with st.spinner(f"Loading {s_city}..."):
+            data = fetch_weather_by_city(s_city)
+            if data:
+                st.session_state.weather_data = data
+                st.session_state.current_city = data["city"]["name"]
+                st.session_state.last_search_term = s_city
+                st.rerun()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        temp_label = "°C" if st.session_state.temp_unit == "C" else "°F"
+        if st.button(temp_label, key="sb_temp_btn", help="Toggle Unit", use_container_width=True):
+            st.session_state.temp_unit = "F" if st.session_state.temp_unit == "C" else "C"
+            st.rerun()
+    with col2:
+        theme_icon = ":material/dark_mode:" if st.session_state.theme == "dark" else ":material/light_mode:"
+        if st.button(theme_icon, key="sb_theme_btn", help="Toggle Theme", use_container_width=True):
+            new_theme = "light" if st.session_state.theme == "dark" else "dark"
+            st.session_state.theme = new_theme
+            import toml as _toml
+            os.makedirs(".streamlit", exist_ok=True)
+            cfg_path = ".streamlit/config.toml"
+            try:
+                with open(cfg_path, 'r') as f: cfg = _toml.load(f)
+            except Exception: cfg = {}
+            if "theme" not in cfg: cfg["theme"] = {}
+            cfg["theme"]["base"] = new_theme
+            with open(cfg_path, 'w') as f: _toml.dump(cfg, f)
+            st.rerun()
+    with col3:
+        if st.button(":material/logout:", key="sb_logout_btn", help="Sign Out", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.user_info = None
+            st.rerun()
+
     # Load profile data if not in session state
     if "user_profile" not in st.session_state or st.session_state.user_profile is None:
         profile_res = db.get_user_profile(st.session_state.user_info["id"])
@@ -1675,11 +1718,11 @@ try:
 except Exception:
     pass
 
-# ─── Header: Logo + Search + User + ... ──────────────────────────
+# ─── Header ───
 user_display = st.session_state.user_info["username"] if st.session_state.user_info else "Guest"
 _user_initial = user_display[0].upper() if user_display else "U"
 
-hdr_logo, hdr_search, hdr_user, hdr_temp, hdr_theme, hdr_logout = st.columns([1.5, 4.5, 2, 0.8, 0.4, 0.4])
+hdr_logo, hdr_user = st.columns([8, 2])
 
 with hdr_logo:
     st.markdown(f"""
@@ -1692,23 +1735,6 @@ with hdr_logo:
     </div>
     """, unsafe_allow_html=True)
 
-with hdr_search:
-    from frontend.city_autocomplete import city_autocomplete
-    # Explicitly pass the current city as default if available to keep sync
-    default_search = st.session_state.get("last_search_term") or st.session_state.get("current_city") or ""
-    
-    s_city = city_autocomplete("Search City", default_value=default_search, placeholder="Search city (e.g. Tokyo, London, Paris)...", key="hdr_city_search")
-    
-    # Trigger search only if the term has actually changed
-    if s_city and s_city != st.session_state.get("last_search_term"):
-        with st.spinner(f"Loading {s_city}..."):
-            data = fetch_weather_by_city(s_city)
-            if data:
-                st.session_state.weather_data = data
-                st.session_state.current_city = data["city"]["name"]
-                st.session_state.last_search_term = s_city
-                st.rerun()
-
 with hdr_user:
     st.markdown(f"""
     <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:4px 0px;">
@@ -1716,39 +1742,6 @@ with hdr_user:
         <span style="font-size:0.8rem;color:var(--text-secondary);font-weight:500;">{user_display}</span>
     </div>
     """, unsafe_allow_html=True)
-
-with hdr_temp:
-    temp_label = "°C" if st.session_state.temp_unit == "C" else "°F"
-    if st.button(temp_label, key="toggle_temp_btn", help="Toggle Temperature Unit"):
-        st.session_state.temp_unit = "F" if st.session_state.temp_unit == "C" else "C"
-        st.rerun()
-
-with hdr_theme:
-    theme_icon = ":material/dark_mode:" if st.session_state.theme == "dark" else ":material/light_mode:"
-    if st.button(theme_icon, key="toggle_theme_btn", help="Toggle Theme"):
-        new_theme = "light" if st.session_state.theme == "dark" else "dark"
-        st.session_state.theme = new_theme
-        # Write to config.toml so native Streamlit widgets respect the choice
-        import toml as _toml
-        os.makedirs(".streamlit", exist_ok=True)
-        cfg_path = ".streamlit/config.toml"
-        try:
-            with open(cfg_path, 'r') as f:
-                cfg = _toml.load(f)
-        except Exception:
-            cfg = {}
-        if "theme" not in cfg:
-            cfg["theme"] = {}
-        cfg["theme"]["base"] = new_theme
-        with open(cfg_path, 'w') as f:
-            _toml.dump(cfg, f)
-        st.rerun()
-with hdr_logout:
-    if st.button(":material/logout:", key="logout_btn", help="Sign Out"):
-        st.session_state.logged_in = False
-        st.session_state.user_info = None
-        st.session_state.auth_page = "login"
-        st.rerun()
 
 
 # ─── Auto-detect location on first load ──────

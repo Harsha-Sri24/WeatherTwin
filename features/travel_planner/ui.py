@@ -510,7 +510,10 @@ def render_travel_planner_tab(city: str):
                             with st.container(border=True):
                                 wx = _cached_fetch_airport_weather(icao)
                                 risk = parse_delay_risk(wx)
-                                st.metric(f"🛫 {label} ({icao})", risk.risk_level, f"Score: {risk.delay_risk_score}/100")
+                                # Display risk more clearly
+                                color = "red" if "High" in risk.risk_level else ("orange" if "Moderate" in risk.risk_level else "green")
+                                st.markdown(f"#### {label} ({icao}) <span style='color:{color}; font-size: 0.9rem;'>{risk.risk_level}</span>", unsafe_allow_html=True)
+                                st.metric("Delay Risk Score", f"{risk.delay_risk_score}/100")
                                 if risk.visibility_sm is not None:
                                     st.caption(f"Visibility: {risk.visibility_sm}sm | Wind: {risk.wind_kt}kt")
                                 if risk.delay_reasons:
@@ -527,7 +530,10 @@ def render_travel_planner_tab(city: str):
                             with st.container(border=True):
                                 wx = _cached_fetch_airport_weather(icao)
                                 risk = parse_delay_risk(wx)
-                                st.metric(f"🛬 {label} ({icao})", risk.risk_level, f"Score: {risk.delay_risk_score}/100")
+                                # Display risk more clearly
+                                color = "red" if "High" in risk.risk_level else ("orange" if "Moderate" in risk.risk_level else "green")
+                                st.markdown(f"#### {label} ({icao}) <span style='color:{color}; font-size: 0.9rem;'>{risk.risk_level}</span>", unsafe_allow_html=True)
+                                st.metric("Delay Risk Score", f"{risk.delay_risk_score}/100")
                                 if risk.visibility_sm is not None:
                                     st.caption(f"Visibility: {risk.visibility_sm}sm | Wind: {risk.wind_kt}kt")
                                 if risk.delay_reasons:

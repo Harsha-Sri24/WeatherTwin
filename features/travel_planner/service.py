@@ -707,33 +707,133 @@ def compute_road_conditions(road_data: dict) -> RoadConditions:
 
 AVIATION_BASE = "https://aviationweather.gov/api/data"
 
+# Fallback Coordinate Mapping for Top Airports
+TOP_AIRPORT_COORDS = {
+    "KMCI": (39.2976, -94.7139), "KMIA": (25.7933, -80.2906),
+    "KJFK": (40.6413, -73.7781), "KLAX": (33.9416, -118.4085),
+    "KORD": (41.9742, -87.9073), "KATL": (33.6407, -84.4277),
+    "KSFO": (37.6213, -122.3790), "KSEA": (47.4502, -122.3088),
+    "KDEN": (39.8561, -104.6737), "KDFW": (32.8998, -97.0403),
+    "KEWR": (40.6895, -74.1745), "KCLT": (35.2140, -80.9431),
+    "KPHL": (39.8722, -75.2408), "KPHX": (33.4342, -112.0116),
+    "KIAH": (29.9804, -95.3397), "KBOS": (42.3656, -71.0096),
+    "KMSP": (44.8848, -93.2223), "KDCA": (38.8512, -77.0402),
+    "KIAD": (38.9531, -77.4565), "KBWI": (39.1754, -76.6684),
+    "KSLC": (40.7884, -111.9777), "KSAN": (32.7336, -117.1897),
+    "KTPA": (27.9772, -82.5328), "KMDW": (41.7868, -87.7522),
+    "KBNA": (36.1245, -86.6782), "KFLL": (26.0726, -80.1527),
+}
+
+def _get_wmo_aviation_string(code: int) -> str:
+    """Map WMO weather code (Open-Meteo) to METAR-style wxString."""
+    mapping = {
+        0: "", 1: "", 2: "", 3: "",
+        45: "FG", 48: "FZFG",
+        51: "DZ", 53: "DZ", 55: "DZ",
+        61: "RA", 63: "RA", 65: "RA",
+        66: "FZRA", 67: "FZRA",
+        71: "SN", 73: "SN", 75: "SN",
+        77: "SN",
+        80: "SHRA", 81: "SHRA", 82: "SHRA",
+        85: "SHSN", 86: "SHSN",
+        95: "TSRA", 96: "TSRA", 99: "TSRA",
+    }
+    return mapping.get(code, "")
+
+def _fetch_airport_fallback(icao_code: str) -> list:
+    """Fallback fetcher using Open-Meteo if primary Aviation API fails."""
+    coords = TOP_AIRPORT_COORDS.get(icao_code)
+    if not coords:
+        # Try to resolve via geocoding if not in top list
+        try:
+            coords = _run_async(_geocode_city(icao_code))
+        except:
+            coords = None
+            
+    if not coords:
+        return []
+
+    try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": coords[0],
+            "longitude": coords[1],
+            "current": ["temperature_2m", "relative_humidity_2m", "weather_code", "wind_speed_10m", "wind_gusts_10m", "visibility"],
+            "timezone": "auto"
+        }
+        resp = sync_requests.get(url, params=params, timeout=5)
+        if resp.status_code != 200:
+            return []
+            
+        data = resp.json().get("current", {})
+        # Map to METAR-like dict
+        synth_metar = {
+            "icao": icao_code,
+            "temp": data.get("temperature_2m"),
+            "wspd": round(data.get("wind_speed_10m", 0) / 1.852), # km/h -> knots
+            "wgst": round(data.get("wind_gusts_10m", 0) / 1.852), # km/h -> knots
+            "visib": round(data.get("visibility", 10000) / 1609.34, 1), # meters -> statue miles
+            "wxString": _get_wmo_aviation_string(data.get("weather_code", 0)),
+            "clouds": [], # simplified
+            "is_fallback": True
+        }
+        return [synth_metar]
+    except Exception as e:
+        print(f"Fallback Fetch Exception for {icao_code}: {e}")
+        return []
+
 
 def fetch_airport_weather(icao_code: str) -> dict:
     """
     Fetch METAR (current conditions) from AviationWeather.gov.
     ICAO examples: KORD (Chicago O'Hare), KJFK (JFK), KLAX (LAX)
     """
+    icao_code = icao_code.strip().upper()
+    headers = {
+        "User-Agent": "WeatherTwin-App/1.0 (contact: harshithavenky91@gmail.com)"
+    }
     try:
         metar_resp = sync_requests.get(
             f"{AVIATION_BASE}/metar",
             params={"ids": icao_code, "format": "json"},
+            headers=headers,
             timeout=10,
         )
-        metar = metar_resp.json() if metar_resp.status_code == 200 else []
-    except Exception:
+        if metar_resp.status_code == 200:
+            metar = metar_resp.json()
+        else:
+            print(f"METAR API Error for {icao_code}: Status {metar_resp.status_code}")
+            metar = []
+    except Exception as e:
+        print(f"METAR Fetch Exception for {icao_code}: {e}")
         metar = []
 
     try:
         taf_resp = sync_requests.get(
             f"{AVIATION_BASE}/taf",
             params={"ids": icao_code, "format": "json"},
+            headers=headers,
             timeout=10,
         )
-        taf = taf_resp.json() if taf_resp.status_code == 200 else []
-    except Exception:
+        if taf_resp.status_code == 200:
+            taf = taf_resp.json()
+        else:
+            print(f"TAF API Error for {icao_code}: Status {taf_resp.status_code}")
+            taf = []
+    except Exception as e:
+        print(f"TAF Fetch Exception for {icao_code}: {e}")
         taf = []
 
+    if not metar:
+        print(f"Primary METAR API empty for {icao_code}, attempting fallback (Top list or Geocoding)...")
+        metar = _fetch_airport_fallback(icao_code)
+        if metar:
+            print(f"Fallback SUCCESS for {icao_code}")
+        else:
+            print(f"Fallback FAILED for {icao_code}")
+
     return {"metar": metar, "taf": taf, "icao": icao_code}
+
 
 
 def parse_delay_risk(airport_data: dict) -> FlightDelayRisk:
@@ -751,11 +851,13 @@ def parse_delay_risk(airport_data: dict) -> FlightDelayRisk:
     if not metar:
         return FlightDelayRisk(
             icao=icao, delay_risk_score=0, risk_level="❓ No Data",
-            delay_reasons=["Airport weather data unavailable"],
+            delay_reasons=["Airport data unavailable (API Connection Error)"],
             conditions_summary="No METAR available",
         )
 
     m = metar[0] if isinstance(metar, list) else metar
+    is_fallback = m.get("is_fallback", False)
+    fallback_note = " (Estimated from regional weather)" if is_fallback else ""
 
     # Extract key METAR fields
     visibility_sm = m.get("visib", 10)
@@ -826,7 +928,7 @@ def parse_delay_risk(airport_data: dict) -> FlightDelayRisk:
         delay_reasons=delay_reasons,
         visibility_sm=visibility_sm if isinstance(visibility_sm, (int, float)) else None,
         wind_kt=wind_speed_kt,
-        conditions_summary=wx_string or "No significant weather",
+        conditions_summary=(wx_string or "No significant weather") + fallback_note,
         raw_temp_c=temp_c,
     )
 
