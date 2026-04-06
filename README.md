@@ -2,85 +2,74 @@
 
 **GenAI-Powered Climate Intelligence & Substance Abuse Risk Detection Command Center**
 
-WeatherTwin goes beyond basic forecasts to provide personalized, context-aware weather insights and community health surveillance. It uses Large Language Models (LLMs) combined with Retrieval-Augmented Generation (RAG) to translate complex climate and clinical data into clear, actionable explanations.
+WeatherTwin is a multi-dimensional analysis platform providing personalized climate insights and advanced community health surveillance. It uses Large Language Models (LLMs) combined with Retrieval-Augmented Generation (RAG) to translate complex climate, agricultural, and clinical data into actionable explanations.
 
-
-> **Team:** CloudMind
-> **Team Members:** Harsha Sri Neeriganti, Sayush Maharjan
+> **NRT AI Challenge Submission**  
+> **Challenge 1:** AI for Substance Abuse Risk Detection from Social Signals  
+> **Team:** CloudMind  
+> **Team Members:** Harsha Sri Neeriganti, Sayush Maharjan  
 > **Demo Video:** [https://youtu.be/IUzAAvJeHZE](https://youtu.be/IUzAAvJeHZE)  
 > **Live App:** [https://weathertwin-fjyoanxtvya7tvmmdfppsy.streamlit.app/](https://weathertwin-fjyoanxtvya7tvmmdfppsy.streamlit.app/)
 
 ---
 
-## 🚀 Key Features
+## 🚀 The WeatherTwin Command Center (Features)
 
-### 🌡️ Climate Intelligence Module
-| Feature | Description |
+| Tab / Feature | Description |
 | :--- | :--- |
-| **Current Conditions** | Real-time weather with contextual anomaly assessment |
-| **Historical Context** | Compare today's weather to 5-year historical norms (Z-scores) |
-| **Climate Trends** | Detect warming/cooling trends with automated statistical analysis |
-| **AI Insights** | LLM-generated proactive climate intelligence (RAG-powered) |
-| **AI Chat** | Conversational Q&A about weather, planning, and climate trends |
-| **Interactive Map** | Dynamic location markers and geospatial visualization |
-
-### 🏥 Public Health Module (NRT AI Challenge)
-| Feature | Description |
-| :--- | :--- |
-| **Risk Signal Detection** | Statistical spike detection (1.3x rolling average) to identify surges. |
-| **Seasonal Breakdown** | Substance distribution analysis (Pie Charts) by Winter/Spring/Summer/Fall. |
-| **"Why and How" AI** | Narrative reasoning explaining climate-driven health triggers. |
-| **Resource Locator** | Proximity-based search for 40,000+ SAMHSA treatment facilities. |
+| **🏥 Public Health** | **NRT Challenge Module**: Statistical spike detection, seasonal substance pie charts, and "Why and How" AI reasoning for overdose risks. |
+| **🌤️ Dashboard** | Real-time weather, 5-year historical norms (Z-scores), and proactive RAG-powered AI insights on clothing and activity. |
+| **🔄 Compare** | Side-by-side analysis of two cities with shared interactive maps and comparative weather metrics. |
+| **🧳 Travel Planner** | AI-driven weather-aware itinerary generation for global travel planning. |
+| **🌱 Agriculture** | Specialized irrigation advice, frost alerts, and soil moisture insights for farmers and gardeners. |
+| **🏥 Health Weather** | Personalized health advice relating weather to asthma, allergies, and cardiovascular safety. |
+| **🤖 Smart Rec** | AI-suggested activities based on current environmental conditions and user preferences. |
+| **🌋 Simulator** | Climate simulation module visualizing future environmental scenarios based on current trends. |
+| **📰 Climate News** | Real-time curated news feed on climate change and environmental policy. |
+| **🖥️ Monitoring** | Live system health dashboard tracking LLM latency, API status, and database performance. |
 
 ---
 
-## 🎯 2. Problem Definition
-1.  **The Climate Context Gap**: Traditional weather apps show raw numbers but lack "contextual reasoning" (Historical status and personal impact).
-2.  **The Public Health "Silent Signal"**: Substance abuse surges are often buried in reports. CPHI addresses this by providing **automated risk detection** and **explainable AI** to mobilize local resources.
+## 🎯 Problem Definitions
+1.  **The Information Gap**: Traditional weather apps show numbers; WeatherTwin provides **reasoning**.
+2.  **The Public Health "Silent Signal"**: Substance abuse surges are often buried in dense datasets. CPHI provides **automated detection** and **explainable AI** for localized response.
 
-## 📊 3. Dataset & Preprocessing
-- **Open-Meteo**: Real-time, forecast, and 5-year historical archived weather.
+## 📊 Dataset & Preprocessing
+- **Open-Meteo & OpenWeatherMap**: Real-time and 5-year historical climate data.
 - **CDC Provisional Overdose Deaths**: Monthly state-level fatalities (Socrata API).
-- **SAMHSA Facility Locator**: National database of accredited recovery centers.
-- **Normalization**: Synchronizing heterogeneous data sources into a relational SQLite database (`public_health.db`).
+- **SAMHSA Facility Locator**: A national database of recovery and treatment centers.
+- **Processing**: Real-time mapping of diverse data streams into a persistent SQLite database.
 
-## 🧠 4. Model & System Description
-- **Statistical Engine**: 3-month rolling average surge detection for local spikes.
-- **GenAI Reasoning**: Llama 3.3 70B via Groq with RAG-based context injection for empathetic, data-grounded summaries.
-- **Seasonal Analysis**: Mapping death rates to climatic seasons to identify temporal risk factors.
+## 🧠 Model & System Description
+- **Intelligence**: Llama 3.3 70B via Groq API (High-speed inference).
+- **Temporal Analysis**: 3-month rolling baseline for statistical surge detection.
+- **RAG Architecture**: Dynamic context injection for evidence-based AI reasoning.
 
-## 🛠️ 5. Setup & Execution Instructions
+## 📂 Modular Code Structure
+```
+├── streamlit_app.py           # Unified Dashboard Interface
+├── backend/                   # Core Services (LLM, DB, Weather)
+├── features/                  # Specialized Analysis Modules
+│   ├── public_health/         # NRT Challenge Module
+│   ├── travel_planner/        # Travel Itinerary Intelligence
+│   ├── agriculture/           # Agricultural Analytics
+│   ├── health_weather/        # Personal Health Guidance
+│   └── climate_simulator/     # Future Projections
+└── data/                      # Persistent Knowledge Base
+```
 
-### Prerequisites
-- Python 3.9+
-- [Groq API Key](https://console.groq.com)
+## 🛠️ Setup & Execution Instructions
 
-### Installation
-1.  **Clone the Repository**
-2.  **Install Dependencies**
+1.  **Clone & Install**
     ```bash
     pip install -r requirements.txt
     ```
-3.  **Configure Environment**
-    Create a `.env` file in the root directory:
-    ```bash
-    GROQ_API_KEY=your_key_here
-    ```
-4.  **Run Application**
+2.  **Configure Environment**
+    Add your `GROQ_API_KEY` to the `.env` file.
+3.  **Run Application**
     ```bash
     streamlit run streamlit_app.py
     ```
 
-## 🏗️ 6. Tech Stack
-- **Frontend/UI**: Streamlit (Modern dark-mode design), Plotly, Chart.js.
-- **Backend API**: Python FastAPI (available for headless API access).
-- **Intelligence**: Llama 3.3 70B via Groq API.
-- **Storage**: Local SQLite for high-speed reproducibility.
-
-## 🔄 7. Reproducibility
-Our system ensures deterministic results for the NRT Challenge:
-- **Local Persistence**: Calculation for "Spikes" and "YoY Change" will yield identical results across different systems due to local data caching.
-- **Fixed Seeds**: LLM temperature is optimized for consistent narrative summaries.
-
 ---
-**Team WeatherTwin** | *Final Submission for NRT AI Challenge (April 2026)*
+**Team CloudMind** | *Final Submission for NRT AI Challenge (April 2026)*
