@@ -5,7 +5,8 @@
 WeatherTwin goes beyond basic forecasts to provide personalized, context-aware weather insights and community health surveillance. It uses Large Language Models (LLMs) combined with Retrieval-Augmented Generation (RAG) to translate complex climate and clinical data into clear, actionable explanations.
 
 
-> **Team:** CloudMind  
+> **Team:** CloudMind
+> **Team Members:** Harsha Sri Neeriganti, Sayush Maharjan
 > **Demo Video:** [https://youtu.be/IUzAAvJeHZE](https://youtu.be/IUzAAvJeHZE)  
 > **Live App:** [https://weathertwin-fjyoanxtvya7tvmmdfppsy.streamlit.app/](https://weathertwin-fjyoanxtvya7tvmmdfppsy.streamlit.app/)
 
