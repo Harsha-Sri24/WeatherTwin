@@ -71,5 +71,3 @@ WeatherTwin is a multi-dimensional analysis platform providing personalized clim
     streamlit run streamlit_app.py
     ```
 
----
-**Team CloudMind** | *Final Submission for NRT AI Challenge (April 2026)*
