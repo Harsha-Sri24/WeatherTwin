@@ -1,5 +1,4 @@
-# WeatherTwin 🌤️ & AI Public Health Intelligence
-
+# 🌤️ WeatherTwin:Context-Aware Weather Intelligence via RAG and LLM Agents
 **Grounding real-time forecasts in regional history to surface risk that raw numbers miss.**
 
 WeatherTwin is a multi-dimensional analysis platform providing personalized climate insights and advanced community health surveillance. It uses Large Language Models (LLMs) combined with Retrieval-Augmented Generation (RAG) to translate complex climate, agricultural, and clinical data into actionable explanations.
