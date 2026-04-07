@@ -4,8 +4,7 @@
 
 WeatherTwin is a multi-dimensional analysis platform providing personalized climate insights and advanced community health surveillance. It uses Large Language Models (LLMs) combined with Retrieval-Augmented Generation (RAG) to translate complex climate, agricultural, and clinical data into actionable explanations.
 
-> **NRT AI Challenge Submission**  
-> **Challenge 1:** AI for Substance Abuse Risk Detection from Social Signals  
+> **Research-A-Roo – Project Submission**   
 > **Team:** CloudMind  
 > **Team Members:** Harsha Sri Neeriganti, Sayush Maharjan  
 > **Demo Video:** [https://youtu.be/IUzAAvJeHZE](https://youtu.be/IUzAAvJeHZE)  
@@ -66,7 +65,8 @@ WeatherTwin is a multi-dimensional analysis platform providing personalized clim
     ```
 2.  **Configure Environment**
     Add your `GROQ_API_KEY` to the `.env` file.
-3.  **Run Application**
+    
+4.  **Run Application**
     ```bash
     streamlit run streamlit_app.py
     ```
