@@ -1,10 +1,10 @@
 # WeatherTwin 🌤️ & AI Public Health Intelligence
 
-**GenAI-Powered Climate Intelligence & Substance Abuse Risk Detection Command Center**
+**Grounding real-time forecasts in regional history to surface risk that raw numbers miss.**
 
 WeatherTwin is a multi-dimensional analysis platform providing personalized climate insights and advanced community health surveillance. It uses Large Language Models (LLMs) combined with Retrieval-Augmented Generation (RAG) to translate complex climate, agricultural, and clinical data into actionable explanations.
 
-> **Research-A-Roo – Project Submission**   
+> **Research-A-Roo – Submission**   
 > **Team:** CloudMind  
 > **Team Members:** Harsha Sri Neeriganti, Sayush Maharjan  
 > **Demo Video:** [https://youtu.be/IUzAAvJeHZE](https://youtu.be/IUzAAvJeHZE)  
@@ -53,7 +53,9 @@ WeatherTwin is a multi-dimensional analysis platform providing personalized clim
 │   ├── travel_planner/        # Travel Itinerary Intelligence
 │   ├── agriculture/           # Agricultural Analytics
 │   ├── health_weather/        # Personal Health Guidance
+│   └── smart-recommender/     # Activity recommender
 │   └── climate_simulator/     # Future Projections
+│   └── monitoring_dashboard/  # Monitors API/query use
 └── data/                      # Persistent Knowledge Base
 ```
 
